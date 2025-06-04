@@ -195,7 +195,8 @@ def train(hyp, opt, device, callbacks):
         prefix=colorstr("train: "),
         shuffle=True,
         seed=opt.seed,
-        rgbt_input=opt.rgbt,
+        # rgbt_input=opt.rgbt,
+        rgbt_input=True,
     )
     labels = np.concatenate(dataset.labels, 0)
     mlc = int(labels[:, 0].max())  # max label class
@@ -215,7 +216,8 @@ def train(hyp, opt, device, callbacks):
         workers=workers,
         pad=0.5,
         prefix=colorstr("val: "),
-        rgbt_input=opt.rgbt,
+        # rgbt_input=opt.rgbt,
+        rgbt_input=True,
     )[0]
 
     # pre-reduce anchor precision
