@@ -177,7 +177,20 @@ def train(hyp, opt, device, callbacks):
     # Resume
     best_fitness, start_epoch = 0.0, 0
 
-    # Trainloader
+    # Update hyperparameters for RGBT data
+    if True:  # Always apply RGBT-optimized hyperparameters
+        hyp['hsv_h'] = 0.015  # Reduced hue augmentation for thermal images
+        hyp['hsv_s'] = 0.4    # Moderate saturation augmentation
+        hyp['hsv_v'] = 0.4    # Moderate value augmentation
+        hyp['degrees'] = 5.0   # Limited rotation to maintain alignment
+        hyp['translate'] = 0.05 # Limited translation to maintain alignment
+        hyp['scale'] = 0.05   # Limited scaling to maintain alignment
+        hyp['shear'] = 0.0    # No shear to maintain alignment
+        hyp['perspective'] = 0.0 # No perspective to maintain alignment
+        hyp['mixup'] = 0.1    # Reduced mixup probability
+        hyp['mosaic'] = 0.3   # Reduced mosaic probability
+        
+    # Trainloader with RGBT-optimized augmentation
     train_loader, dataset = create_dataloader(
         train_path,
         imgsz,
@@ -185,7 +198,7 @@ def train(hyp, opt, device, callbacks):
         gs,
         single_cls,
         hyp=hyp,
-        augment=True,
+        augment=True,  # Enable our RGBT-optimized augmentation
         cache=None if opt.cache == "val" else opt.cache,
         rect=opt.rect,
         rank=-1,
@@ -195,7 +208,6 @@ def train(hyp, opt, device, callbacks):
         prefix=colorstr("train: "),
         shuffle=True,
         seed=opt.seed,
-        # rgbt_input=opt.rgbt,
         rgbt_input=True,
     )
     labels = np.concatenate(dataset.labels, 0)

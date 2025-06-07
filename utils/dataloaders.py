@@ -779,15 +779,16 @@ class LoadImagesAndLabels(Dataset):
         index = self.indices[index]  # linear, shuffled, or image_weights
 
         hyp = self.hyp
-        mosaic = self.mosaic and random.random() < hyp["mosaic"]
+        mosaic = self.mosaic and random.random() < 0.3  # Reduced mosaic probability for RGBT data
         if mosaic:
             # Load mosaic
             img, labels = self.load_mosaic(index)
             shapes = None
 
-            # MixUp augmentation
-            if random.random() < hyp["mixup"]:
-                img, labels = mixup(img, labels, *self.load_mosaic(random.choice(self.indices)))
+            # MixUp augmentation - reduced probability for RGBT
+            if random.random() < hyp.get('mixup', 0.1) * 0.5:  # Reduced mixup probability
+                img_2, labels_2 = self.load_mosaic(random.randint(0, self.n - 1))
+                img, labels = self.mixup_rgbt(img, labels, img_2, labels_2)
 
         else:
             # Load image
@@ -803,53 +804,62 @@ class LoadImagesAndLabels(Dataset):
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
             if self.augment:
-                img, labels = random_perspective(
-                    img,
-                    labels,
-                    degrees=hyp["degrees"],
-                    translate=hyp["translate"],
-                    scale=hyp["scale"],
-                    shear=hyp["shear"],
-                    perspective=hyp["perspective"],
-                )
+                # Apply RGBT-friendly augmentations
+                img, labels = self.rgbt_friendly_augment(img, labels)
 
-        nl = len(labels)  # number of labels
-        if nl:
-            labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1e-3)
-
-        if self.augment:
-            # Albumentations
+        # Update normalized labels
+        nL = len(labels)  # number of labels
+        if nL:
+            labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
+        
+        # Apply albumentations if available
+        if self.augment and hasattr(self, 'albumentations') and self.albumentations:
             img, labels = self.albumentations(img, labels)
-            nl = len(labels)  # update after albumentations
+            nL = len(labels)  # update after albumentations
 
-            # HSV color-space
-            augment_hsv(img, hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
-
-            # Flip up-down
-            if random.random() < hyp["flipud"]:
-                img = np.flipud(img)
-                if nl:
-                    labels[:, 2] = 1 - labels[:, 2]
-
-            # Flip left-right
-            if random.random() < hyp["fliplr"]:
-                img = np.fliplr(img)
-                if nl:
-                    labels[:, 1] = 1 - labels[:, 1]
-
-            # Cutouts
-            # labels = cutout(img, labels, p=0.5)
-            # nl = len(labels)  # update after cutout
-
-        labels_out = torch.zeros((nl, 6))
-        if nl:
+        labels_out = torch.zeros((nL, 6))
+        if nL:
             labels_out[:, 1:] = torch.from_numpy(labels)
 
         # Convert
         img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
         img = np.ascontiguousarray(img)
 
-        return torch.from_numpy(img), labels_out, self.im_files[index], shapes, index
+        return torch.from_numpy(img), labels_out, self.im_files[index], shapes
+        
+    def rgbt_friendly_augment(self, img, labels):
+        """Apply augmentation methods suitable for RGBT data that maintain alignment between modalities"""
+        nL = len(labels)
+        
+        # 1. Controlled color augmentation - more gentle for thermal images
+        augment_hsv(img, hgain=self.hsv_h, sgain=self.hsv_s, vgain=self.hsv_v)
+        
+        # 2. Controlled geometric transformations - limited to maintain alignment
+        if random.random() < 0.5:  # Reduced probability
+            img, labels = random_perspective(
+                img,
+                labels,
+                degrees=self.degrees,      # Reduced rotation
+                translate=self.translate,  # Reduced translation
+                scale=self.scale,          # Reduced scaling
+                shear=self.shear,          # No shear
+                perspective=self.perspective, # No perspective
+            )
+            
+        # 3. Flips - these maintain alignment between modalities
+        if random.random() < 0.5:  # horizontal flip
+            img = np.fliplr(img)
+            if nL:
+                labels[:, 1] = 1 - labels[:, 1]
+                
+        # 4. Contrast and brightness adjustments - safer for RGBT data
+        if random.random() < 0.5:
+            # Apply mild contrast adjustment
+            alpha = random.uniform(0.85, 1.15)  # contrast control
+            img = img * alpha + (1-alpha) * img.mean()
+            img = np.clip(img, 0, 255)
+            
+        return img, labels
 
     def load_image(self, i):
         """
@@ -1094,8 +1104,22 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
         super().__init__(path, **kwargs)
 
-        # Enable mosaic augmentation when augment is True
-        self.mosaic = kwargs.get('augment', False) and random.random() < 0.5
+        # Enhanced augmentation strategy for RGBT data
+        self.augment = kwargs.get('augment', False)
+        # Only use mosaic with reduced probability for RGBT data
+        self.mosaic = self.augment and random.random() < 0.3  # Reduced probability
+        
+        # Get hyperparameters from kwargs or use default values
+        self.hyp = kwargs.get('hyp', {})
+        # Control augmentation intensity for RGBT data
+        self.hsv_h = self.hyp.get('hsv_h', 0.015)  # Reduced HSV gains for RGBT
+        self.hsv_s = self.hyp.get('hsv_s', 0.4)
+        self.hsv_v = self.hyp.get('hsv_v', 0.4)
+        self.degrees = self.hyp.get('degrees', 5.0)  # Reduced rotation for alignment
+        self.translate = self.hyp.get('translate', 0.05)  # Reduced translation
+        self.scale = self.hyp.get('scale', 0.05)  # Reduced scaling
+        self.shear = self.hyp.get('shear', 0.0)  # No shear to maintain alignment
+        self.perspective = self.hyp.get('perspective', 0.0)  # No perspective to maintain alignment
 
         # Set ignore flag
         cond = self.ignore_settings['train' if is_train else 'test']
