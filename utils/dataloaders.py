@@ -1094,8 +1094,8 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
         super().__init__(path, **kwargs)
 
-        # TODO: make mosaic augmentation work
-        self.mosaic = False
+        # Enable mosaic augmentation when augment is True
+        self.mosaic = kwargs.get('augment', False) and random.random() < 0.5
 
         # Set ignore flag
         cond = self.ignore_settings['train' if is_train else 'test']
@@ -1200,15 +1200,14 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp["mosaic"]
         if mosaic:
-            raise NotImplementedError('Please make "mosaic" augmentation work!')
 
-            # TODO: Load mosaic
-            img, labels = self.load_mosaic(index)
+            # Load mosaic for RGB-T images
+            imgs, labels = self.load_mosaic(index)
             shapes = None
 
-            # TODO: MixUp augmentation
+            # MixUp augmentation for RGB-T
             if random.random() < hyp["mixup"]:
-                img, labels = mixup(img, labels, *self.load_mosaic(random.choice(self.indices)))
+                imgs, labels = self.mixup_rgbt(imgs, labels, *self.load_mosaic(random.choice(self.indices)))
 
         else:
             # Load image
@@ -1227,7 +1226,6 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
                     labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
                 if self.augment:
-                    raise NotImplementedError('Please make data augmentation work!')
 
                     img, labels = random_perspective(
                         img,
@@ -1326,6 +1324,90 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         imgs_vis = torch.stack([img[1] for img in imgs], 0)
         return (imgs_lwir, imgs_vis), torch.cat(label, 0), path, shapes, indices
 
+    def load_mosaic(self, index):
+        """Loads a 4-image mosaic for RGB-T images, with both LWIR and visible channels."""
+        labels4 = []
+        s = self.img_size
+        yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border)  # mosaic center x, y
+        indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
+        random.shuffle(indices)
+        
+        # Create mosaics for each modality
+        imgs4 = []
+        for mod_idx in range(len(self.modalities)):
+            img4 = np.full((s * 2, s * 2, 3), 114, dtype=np.uint8)  # base image with 4 tiles
+            
+            for i, idx in enumerate(indices):
+                # Load image
+                imgs, _, hw_resized = self.load_image(idx)
+                img = imgs[mod_idx]
+                h, w = img.shape[:2]
+                
+                # Place img in img4
+                if i == 0:  # top left
+                    x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
+                    x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
+                elif i == 1:  # top right
+                    x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
+                    x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+                elif i == 2:  # bottom left
+                    x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
+                    x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
+                elif i == 3:  # bottom right
+                    x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
+                    x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+                
+                img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+                padw = x1a - x1b
+                padh = y1a - y1b
+                
+                # Labels - only process labels once for the mosaic (for the first modality)
+                if mod_idx == 0:
+                    labels = self.labels[idx].copy()
+                    if labels.size:
+                        labels[:, 1:5] = xywhn2xyxy(labels[:, 1:5], w, h, padw, padh)  # normalized xywh to pixel xyxy format
+                    labels4.append(labels)
+            
+            # Apply augmentations to the mosaic for this modality
+            if self.augment and mod_idx == 0:  # Apply augmentations to labels only once
+                img4, labels4_aug = random_perspective(
+                    img4,
+                    np.concatenate(labels4, 0),
+                    degrees=self.hyp["degrees"],
+                    translate=self.hyp["translate"],
+                    scale=self.hyp["scale"],
+                    shear=self.hyp["shear"],
+                    perspective=self.hyp["perspective"],
+                    border=self.mosaic_border,
+                )
+                # Update labels for all modalities
+                if mod_idx == 0:
+                    labels4 = labels4_aug
+            elif self.augment:  # Apply same transformations without label changes
+                img4, _ = random_perspective(
+                    img4,
+                    np.zeros((0, 8), dtype=np.float32),  # Empty labels for non-first modalities
+                    degrees=self.hyp["degrees"],
+                    translate=self.hyp["translate"],
+                    scale=self.hyp["scale"],
+                    shear=self.hyp["shear"],
+                    perspective=self.hyp["perspective"],
+                    border=self.mosaic_border,
+                )
+            
+            imgs4.append(img4)
+        
+        return imgs4, labels4
+    
+    def mixup_rgbt(self, img, labels, img2, labels2):
+        """Applies mixup augmentation for RGB-T images https://arxiv.org/pdf/1710.09412.pdf"""
+        r = np.random.beta(32.0, 32.0)  # mixup ratio, alpha=beta=32.0
+        imgs = []
+        for img1, img2_mod in zip(img, img2):
+            imgs.append(r * img1 + (1 - r) * img2_mod)
+        labels = np.concatenate((labels, labels2), 0)
+        return imgs, labels
+        
     @staticmethod
     def collate_fn4(batch):
         raise NotImplementedError
