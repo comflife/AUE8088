@@ -831,34 +831,38 @@ class LoadImagesAndLabels(Dataset):
         """Apply augmentation methods suitable for RGBT data that maintain alignment between modalities"""
         nL = len(labels)
         
-        # 1. Controlled color augmentation - more gentle for thermal images
+        # 1. 수평 뒤집기 (horizontal flip) - RGB와 열화상 이미지 간 정렬 유지에 안전한 변환
+        if random.random() < 0.5:  # 50% 확률로 적용
+            img = np.fliplr(img)
+            if nL:
+                labels[:, 1] = 1 - labels[:, 1]  # x 좌표 뒤집기
+        
+        # 2. HSV 색상 변환 - 열화상 이미지에 대해 더 약한 변환 적용
+        # 색조(hue)는 매우 약하게, 채도(saturation)와 명도(value)는 중간 정도로 조절
         augment_hsv(img, hgain=self.hsv_h, sgain=self.hsv_s, vgain=self.hsv_v)
         
-        # 2. Controlled geometric transformations - limited to maintain alignment
-        if random.random() < 0.5:  # Reduced probability
+        # 3. 기하학적 변환 - 정렬 유지를 위해 제한적으로 적용
+        # hyp 설정에 따라 회전, 이동, 크기 조절을 매우 제한적으로 적용
+        # 전단(shear)과 원근(perspective) 변환은 사용하지 않음
+        if self.degrees > 0 or self.translate > 0 or self.scale > 0:
+            # 매개변수가 0보다 클 때만 적용 (train_simple.py에서 설정한 단계에 따라 결정됨)
             img, labels = random_perspective(
                 img,
                 labels,
-                degrees=self.degrees,      # Reduced rotation
-                translate=self.translate,  # Reduced translation
-                scale=self.scale,          # Reduced scaling
-                shear=self.shear,          # No shear
-                perspective=self.perspective, # No perspective
+                degrees=self.degrees,      # 회전 (0°로 설정 가능)
+                translate=self.translate,  # 이동 (0으로 설정 가능)
+                scale=self.scale,          # 크기 조절 (0으로 설정 가능)
+                shear=0.0,                 # 전단 변환 사용 안함
+                perspective=0.0,           # 원근 변환 사용 안함
             )
-            
-        # 3. Flips - these maintain alignment between modalities
-        if random.random() < 0.5:  # horizontal flip
-            img = np.fliplr(img)
-            if nL:
-                labels[:, 1] = 1 - labels[:, 1]
+        
+        # 4. 대비(contrast) 및 밝기(brightness) 미세 조정 - 두 모달리티 간의 일관성 향상
+        if random.random() < 0.2:  # 20% 확률로 적용
+            # 매우 약한 대비 조정 (0.95-1.05)
+            contrast = random.uniform(0.95, 1.05)
+            img = img * contrast
+            img = np.clip(img, 0, 255).astype(np.uint8)
                 
-        # 4. Contrast and brightness adjustments - safer for RGBT data
-        if random.random() < 0.5:
-            # Apply mild contrast adjustment
-            alpha = random.uniform(0.85, 1.15)  # contrast control
-            img = img * alpha + (1-alpha) * img.mean()
-            img = np.clip(img, 0, 255)
-            
         return img, labels
 
     def load_image(self, i):

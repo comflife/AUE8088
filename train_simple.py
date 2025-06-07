@@ -190,6 +190,52 @@ def train(hyp, opt, device, callbacks):
         hyp['mixup'] = 0.1    # Reduced mixup probability
         hyp['mosaic'] = 0.3   # Reduced mosaic probability
         
+    # RGBT 데이터를 위한 augmentation 단계적 적용 설정 추가
+    # 성능 개선을 위한 augmentation 단계 설정
+    # 0: augmentation 없음 - 기준 성능을 위해
+    # 1: 가벼운 augmentation - 정렬 유지에 중점
+    # 2: 중간 수준 augmentation - 좋은 균형점
+    # 3: 전체 augmentation - 원래 설정 (매우 강한 증강)
+    rgbt_aug_level = 1  # 현재 적용 단계 - 가벼운 augmentation 적용
+    
+    # 단계별 augmentation 설정
+    if rgbt_aug_level > 0:
+        # 단계 1: 가벼운 augmentation - RGBT 정렬 유지를 위한 매우 약한 증강
+        if rgbt_aug_level == 1:
+            hyp['degrees'] = 0.0      # 회전 없음 - 정렬을 엄격하게 유지
+            hyp['translate'] = 0.0    # 이동 변환 없음
+            hyp['scale'] = 0.0        # 크기 변환 없음
+            hyp['shear'] = 0.0        # 전단 변환 없음
+            hyp['perspective'] = 0.0  # 원근 변환 없음
+            hyp['hsv_h'] = 0.01      # 색상(hue) 변화 최소화
+            hyp['hsv_s'] = 0.1       # 채도(saturation) 변화 최소화 
+            hyp['hsv_v'] = 0.1       # 밝기(value) 변화 최소화
+            hyp['flipud'] = 0.0       # 상하 반전 없음
+            hyp['mixup'] = 0.0        # 믹스업 없음
+            print('\nRGBT Level 1: 가벼운 augmentation 적용 - 정렬 유지에 중점\n')
+            
+        # 단계 2: 중간 수준 augmentation - 좋은 균형점
+        elif rgbt_aug_level == 2:
+            hyp['degrees'] = 2.0      # 약한 회전만 허용
+            hyp['translate'] = 0.02   # 약한 이동만 허용
+            hyp['scale'] = 0.02       # 약한 크기 변환만 허용
+            hyp['shear'] = 0.0        # 전단 변환 없음
+            hyp['perspective'] = 0.0  # 원근 변환 없음
+            hyp['hsv_h'] = 0.015     # 약한 색상 변화
+            hyp['hsv_s'] = 0.2       # 중간 채도 변화
+            hyp['hsv_v'] = 0.2       # 중간 밝기 변화
+            hyp['flipud'] = 0.0       # 상하 반전 없음
+            hyp['mixup'] = 0.05       # 약한 믹스업만 허용
+            print('\nRGBT Level 2: 중간 수준 augmentation 적용\n')
+            
+        # 단계 3: 전체 augmentation
+        elif rgbt_aug_level == 3:
+            # 원래 기본 설정 유지
+            print('\nRGBT Level 3: 전체 augmentation 적용\n')
+    else:
+        # 단계 0: augmentation 없음
+        print('\nRGBT Level 0: augmentation 없음 - 기준 성능 측정\n')
+    
     # Trainloader with RGBT-optimized augmentation
     train_loader, dataset = create_dataloader(
         train_path,
@@ -198,7 +244,7 @@ def train(hyp, opt, device, callbacks):
         gs,
         single_cls,
         hyp=hyp,
-        augment=True,  # Enable our RGBT-optimized augmentation
+        augment=rgbt_aug_level > 0,  # augmentation 단계에 따라 설정
         cache=None if opt.cache == "val" else opt.cache,
         rect=opt.rect,
         rank=-1,
