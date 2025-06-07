@@ -196,7 +196,7 @@ def train(hyp, opt, device, callbacks):
     # 1: 가벼운 augmentation - 정렬 유지에 중점
     # 2: 중간 수준 augmentation - 좋은 균형점
     # 3: 전체 augmentation - 원래 설정 (매우 강한 증강)
-    rgbt_aug_level = 1  # 현재 적용 단계 - 가벼운 augmentation 적용
+    rgbt_aug_level = 0  # 현재 적용 단계 - 가벼운 augmentation 적용
     
     # 단계별 augmentation 설정
     if rgbt_aug_level > 0:
@@ -244,7 +244,8 @@ def train(hyp, opt, device, callbacks):
         gs,
         single_cls,
         hyp=hyp,
-        augment=rgbt_aug_level > 0,  # augmentation 단계에 따라 설정
+        # augment=rgbt_aug_level > 0,  # augmentation 단계에 따라 설정
+        augment=False,
         cache=None if opt.cache == "val" else opt.cache,
         rect=opt.rect,
         rank=-1,

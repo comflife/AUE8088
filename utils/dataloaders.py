@@ -652,6 +652,12 @@ class LoadImagesAndLabels(Dataset):
                 self.labels[i] = label[j]
                 if segment:
                     self.segments[i] = [segment[idx] for idx, elem in enumerate(j) if elem]
+            
+            # Set 'people' class (ID 2) to -1 to be ignored in loss calculation
+            people_mask = (label[:, 0] == 2)
+            if people_mask.any():
+                self.labels[i][people_mask, 0] = -1
+            
             if single_cls:  # single-class training, merge all classes into 0
                 self.labels[i][:, 0] = 0
 

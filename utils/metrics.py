@@ -46,11 +46,15 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir=".", names
     i = np.argsort(-conf)
     tp, conf, pred_cls = tp[i], conf[i], pred_cls[i]
 
-    # Find unique classes
-    unique_classes, nt = np.unique(target_cls, return_counts=True)
+    # # Find unique classes
+    # unique_classes, nt = np.unique(target_cls, return_counts=True)
 
-    # remove ignore class
-    unique_classes = unique_classes[unique_classes != -1]
+    # # remove ignore class
+    # unique_classes = unique_classes[unique_classes != -1]
+
+    # Find unique classes and filter out ignored classes (-1)
+    valid_targets = target_cls[target_cls >= 0]
+    unique_classes, nt_valid = np.unique(valid_targets, return_counts=True)
     nc = unique_classes.shape[0]  # number of classes, number of detections
 
     # Create Precision-Recall curve and compute AP for each class
@@ -58,7 +62,8 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir=".", names
     ap, p, r = np.zeros((nc, tp.shape[1])), np.zeros((nc, 1000)), np.zeros((nc, 1000))
     for ci, c in enumerate(unique_classes):
         i = pred_cls == c
-        n_l = nt[ci]  # number of labels
+        # n_l = nt[ci]  # number of labels
+        n_l = nt_valid[ci]  # number of labels
         n_p = i.sum()  # number of predictions
         if n_p == 0 or n_l == 0:
             continue
@@ -93,7 +98,8 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir=".", names
 
     i = smooth(f1.mean(0), 0.1).argmax()  # max F1 index
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
-    tp = (r * nt).round()  # true positives
+    # tp = (r * nt).round()  # true positives
+    tp = (r * nt_valid).round()  # true positives
     fp = (tp / (p + eps) - tp).round()  # false positives
     return tp, fp, p, r, f1, ap, unique_classes.astype(int)
 

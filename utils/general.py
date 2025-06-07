@@ -754,7 +754,10 @@ def labels_to_class_weights(labels, nc=80):
 
     labels = np.concatenate(labels, 0)  # labels.shape = (866643, 5) for COCO
     classes = labels[:, 0].astype(int)  # labels = [class xywh]
-    weights = np.bincount(classes, minlength=nc)  # occurrences per class
+    # weights = np.bincount(classes, minlength=nc)
+    # Filter out negative class IDs (ignored classes like 'people')
+    valid_classes = classes[classes >= 0]
+    weights = np.bincount(valid_classes, minlength=nc)  # occurrences per class
 
     # Prepend gridpoint count (for uCE training)
     # gpi = ((320 / 32 * np.array([1, 2, 4])) ** 2 * 3).sum()  # gridpoints per image
