@@ -1444,7 +1444,44 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         
     @staticmethod
     def collate_fn4(batch):
-        raise NotImplementedError
+        # RGBT 데이터에 대한 collate_fn4 구현
+        # batch 크기를 4로 줄이는 방식
+        # __getitem__에서 반환하는 5개 항목: imgs, labels_out, path, shapes, index
+        img, label, path, shapes, indices = zip(*batch)  # transposed
+        n = len(shapes) // 4
+        
+        img_mod_count = len(img[0])  # 모달리티 수 (보통 2개: lwir, visible)
+        img_out = [None] * (n * 4 * img_mod_count)
+        label_out = [None] * (n * 4)
+        path_out = [None] * (n * 4)
+        shapes_out = [None] * (n * 4)
+        indices_out = [None] * (n * 4)
+        
+        for i in range(n * 4):
+            idx = i % (n * 4)
+            # 다중 모달 이미지 처리
+            for j in range(img_mod_count):
+                img_out[i*img_mod_count + j] = img[idx][j]
+            
+            label_out[i] = label[idx]
+            path_out[i] = path[idx]
+            shapes_out[i] = shapes[idx]
+            indices_out[i] = indices[idx]
+            
+        # 이미지를 모달리티 별로 분리해서 묶기
+        imgs_by_mod = [[] for _ in range(img_mod_count)]
+        for i in range(len(img_out)):
+            mod_idx = i % img_mod_count
+            imgs_by_mod[mod_idx].append(img_out[i])
+            
+        # 최종 출력 형태로 변환
+        img_out_final = [torch.stack(imgs) for imgs in imgs_by_mod] 
+        
+        for i, l in enumerate(label_out):
+            l[:, 0] = i  # 이미지 인덱스 추가
+            
+        # train_simple.py에서 (imgs, targets, paths, _, _) 형태로 받으므로 5개 값 반환
+        return img_out_final, torch.cat(label_out, 0), path_out, shapes_out, indices_out
 
 # Ancillary functions --------------------------------------------------------------------------------------------------
 def flatten_recursive(path=DATASETS_DIR / "coco128"):

@@ -772,7 +772,8 @@ def labels_to_class_weights(labels, nc=80):
 def labels_to_image_weights(labels, nc=80, class_weights=np.ones(80)):
     """Calculates image weights from labels using class weights for weighted sampling."""
     # Usage: index = random.choices(range(n), weights=image_weights, k=1)  # weighted image sample
-    class_counts = np.array([np.bincount(x[:, 0].astype(int), minlength=nc) for x in labels])
+    # 음수 값 필터링하여 bincount 오류 방지
+    class_counts = np.array([np.bincount(x[x[:, 0] >= 0, 0].astype(int), minlength=nc) for x in labels])
     return (class_weights.reshape(1, nc) * class_counts).sum(1)
 
 

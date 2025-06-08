@@ -36,6 +36,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 import val as validate  # for end-of-epoch mAP
 from models.experimental import attempt_load
 from models.yolo import Model
+from utils.autoanchor import check_anchors  # 자동 앵커 최적화 추가
 from utils.callbacks import Callbacks
 from utils.dataloaders import create_dataloader
 from utils.downloads import attempt_download
@@ -54,6 +55,7 @@ from utils.general import (
     init_seeds,
     intersect_dicts,
     labels_to_class_weights,
+    labels_to_image_weights,  # 이미지 가중치 추가
     methods,
     one_cycle,
     print_args,
@@ -72,8 +74,7 @@ from utils.torch_utils import (
 )
 
 
-# LOGGERS = ("csv", "tb", "wandb", "clearml", "comet")  # *.csv, TensorBoard, Weights & Biases, ClearML
-LOGGERS = ("wandb",)  # *.csv, TensorBoard, Weights & Biases, ClearML
+LOGGERS = ("wandb",)  # TensorBoard, Weights & Biases
 
 def train(hyp, opt, device, callbacks):
     """
@@ -177,6 +178,7 @@ def train(hyp, opt, device, callbacks):
     # Resume
     best_fitness, start_epoch = 0.0, 0
 
+
     # Update hyperparameters for RGBT data
     if True:  # Always apply RGBT-optimized hyperparameters
         hyp['hsv_h'] = 0.015  # Reduced hue augmentation for thermal images
@@ -196,7 +198,8 @@ def train(hyp, opt, device, callbacks):
     # 1: 가벼운 augmentation - 정렬 유지에 중점
     # 2: 중간 수준 augmentation - 좋은 균형점
     # 3: 전체 augmentation - 원래 설정 (매우 강한 증강)
-    rgbt_aug_level = 0  # 현재 적용 단계 - 가벼운 augmentation 적용
+    rgbt_aug_level = 0
+
     
     # 단계별 augmentation 설정
     if rgbt_aug_level > 0:
@@ -236,7 +239,7 @@ def train(hyp, opt, device, callbacks):
         # 단계 0: augmentation 없음
         print('\nRGBT Level 0: augmentation 없음 - 기준 성능 측정\n')
     
-    # Trainloader with RGBT-optimized augmentation
+    # Trainloader
     train_loader, dataset = create_dataloader(
         train_path,
         imgsz,
@@ -244,24 +247,35 @@ def train(hyp, opt, device, callbacks):
         gs,
         single_cls,
         hyp=hyp,
-        # augment=rgbt_aug_level > 0,  # augmentation 단계에 따라 설정
-        augment=False,
+        augment=rgbt_aug_level > 0,
         cache=None if opt.cache == "val" else opt.cache,
         rect=opt.rect,
         rank=-1,
         workers=workers,
-        image_weights=False,
+        image_weights=opt.image_weights,  # 이미지 가중치 옵션 지원
         quad=opt.quad,
-        prefix=colorstr("train: "),
-        shuffle=True,
         seed=opt.seed,
+        prefix=colorstr("train: "),  # 로그 프리픽스 추가
+        shuffle=True,  # 셔플 옵션 추가
         rgbt_input=True,
     )
-    labels = np.concatenate(dataset.labels, 0)
-    mlc = int(labels[:, 0].max())  # max label class
-    assert mlc < nc, f"Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}"
 
-    # Valloader
+    # 검증을 위해 항상 labels 정의
+    labels = np.concatenate(dataset.labels, 0)
+    
+    # 이미지 가중치 설정 (클래스 불균형 처리)
+    if opt.image_weights:
+        # 클래스 빈도에 기반한 이미지 가중치 생성
+        if nc > 1:
+            LOGGER.info('이미지 가중치 활성화: 클래스 불균형 처리중...')
+            cw = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # 클래스 가중치 (원본 레이블 전달)
+            iw = labels_to_image_weights(dataset.labels, nc, cw.cpu())  # CPU로 변환한 후 이미지 가중치 계산
+            dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # 가중치 기반 선택
+    
+    # 레이블 검사
+    mlc = int(labels[:,0].max())
+    assert mlc < nc, f"Label class {mlc} out of range nc={nc}"
+    # Validloader
     val_loader = create_dataloader(
         val_path,
         imgsz,
@@ -281,7 +295,13 @@ def train(hyp, opt, device, callbacks):
 
     # pre-reduce anchor precision
     model.half().float()
+    
+    # 자동 앵커 추가 - 디텍션 앵커 최적화
+    if not opt.noautoanchor:
+        check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)  # AutoAnchor 실행
+        model.half().float()  # pre-reduce anchor precision
 
+    
     callbacks.run("on_pretrain_routine_end", labels, names)
 
     # Model attributes
@@ -344,9 +364,25 @@ def train(hyp, opt, device, callbacks):
                     x["lr"] = np.interp(ni, xi, [hyp["warmup_bias_lr"] if j == 0 else 0.0, x["initial_lr"] * lf(epoch)])
                     if "momentum" in x:
                         x["momentum"] = np.interp(ni, xi, [hyp["warmup_momentum"], hyp["momentum"]])
+                        
+            # 멀티스케일 학습 추가
+            if opt.multi_scale:
+                sz = random.randrange(int(imgsz * 0.5), int(imgsz * 1.5) + gs) // gs * gs  # size
+                sf = sz / max((imgs[0] if isinstance(imgs, list) else imgs).shape[2:])  # scale factor
+                if sf != 1:
+                    if isinstance(imgs, list):
+                        # RGBT 이미지 각각에 대해 리사이즈 적용
+                        resized_imgs = []
+                        for img in imgs:
+                            ns = [math.ceil(x * sf / gs) * gs for x in img.shape[2:]]  # new shape
+                            resized_imgs.append(nn.functional.interpolate(img, size=ns, mode="bilinear", align_corners=False))
+                        imgs = resized_imgs
+                    else:
+                        ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape
+                        imgs = nn.functional.interpolate(imgs, size=ns, mode="bilinear", align_corners=False)
 
             # Forward
-            with torch.amp.autocast(device_type=device.type):
+            with torch.amp.autocast(device_type='cuda'):
                 pred = model(imgs)  # forward
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 if opt.quad:
@@ -493,9 +529,9 @@ def parse_opt(known=False):
     parser.add_argument("--resume_evolve", type=str, default=None, help="resume evolve from last generation")
     parser.add_argument("--bucket", type=str, default="", help="gsutil bucket")
     parser.add_argument("--cache", type=str, nargs="?", const="ram", help="image --cache ram/disk")
-    # parser.add_argument("--image-weights", action="store_true", help="use weighted image selection for training")
+    parser.add_argument("--image-weights", action="store_true", help="use weighted image selection for training")
     parser.add_argument("--device", default="", help="cuda device, i.e. 0 or 0,1,2,3 or cpu")
-    parser.add_argument("--multi-scale", action="store_true", help="vary img-size +/- 50%%")
+    parser.add_argument("--multi-scale", action="store_true", help="vary img-size +/- 50%")
     parser.add_argument("--single-cls", action="store_true", help="train multi-class data as single-class")
     parser.add_argument("--optimizer", type=str, choices=["SGD", "Adam", "AdamW"], default="SGD", help="optimizer")
     parser.add_argument("--sync-bn", action="store_true", help="use SyncBatchNorm, only available in DDP mode")
