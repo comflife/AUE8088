@@ -137,9 +137,18 @@ class BaseModel(nn.Module):
     def _forward_once(self, x, profile=False, visualize=False):
         """Performs a forward pass on the YOLOv5 model, enabling profiling and feature visualization options."""
         y, dt = [], []  # outputs
+        
+        # Handle multi-modal input for RGBT data
+        is_rgbt = isinstance(x, (list, tuple)) and all(isinstance(t, torch.Tensor) for t in x)
+        
         for m in self.model:
             if m.f != -1:  # if not from previous layer
-                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+                if is_rgbt and not isinstance(x, (list, tuple)):
+                    # If we've merged modalities already and x is now a single tensor
+                    x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+                else:
+                    # Handle multi-modal inputs or standard single tensor input
+                    x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
             x = m(x)  # run

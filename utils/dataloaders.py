@@ -653,10 +653,7 @@ class LoadImagesAndLabels(Dataset):
                 if segment:
                     self.segments[i] = [segment[idx] for idx, elem in enumerate(j) if elem]
             
-            # Set 'people' class (ID 2) to -1 to be ignored in loss calculation
-            people_mask = (label[:, 0] == 2)
-            if people_mask.any():
-                self.labels[i][people_mask, 0] = -1
+            # People class is now included in training
             
             if single_cls:  # single-class training, merge all classes into 0
                 self.labels[i][:, 0] = 0
@@ -1309,8 +1306,14 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
                 imgs[ii] = torch.from_numpy(img)
 
-        # Drop occlusion level
-        labels_out = labels_out[:, :-1]
+        # Make sure labels_out is defined
+        try:
+            # Drop occlusion level if labels exist
+            labels_out = labels_out[:, :-1]
+        except UnboundLocalError:
+            # If no labels or labels_out not defined, create an empty tensor
+            labels_out = torch.zeros((0, 6))
+            
         return imgs, labels_out, self.im_files[index], shapes, index
 
     def load_image(self, i):
@@ -1472,10 +1475,30 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         imgs_by_mod = [[] for _ in range(img_mod_count)]
         for i in range(len(img_out)):
             mod_idx = i % img_mod_count
+            # NumPy 배열을 텐서로 변환
+            if isinstance(img_out[i], np.ndarray):
+                img_out[i] = torch.from_numpy(img_out[i])
             imgs_by_mod[mod_idx].append(img_out[i])
             
-        # 최종 출력 형태로 변환
-        img_out_final = [torch.stack(imgs) for imgs in imgs_by_mod] 
+        # 최종 출력 형태로 변환 - 모든 이미지가 텐서인지 확인 및 차원 형식 통일
+        img_out_final = []
+        for imgs in imgs_by_mod:
+            # 각 이미지가 텐서인지 확인 및 변환
+            tensor_imgs = []
+            for img in imgs:
+                # NumPy 배열을 텐서로 변환
+                if isinstance(img, np.ndarray):
+                    # HWC에서 CHW 형식으로 변환
+                    if img.shape[-1] == 3:  # HWC 형식인 경우 [H, W, C]
+                        img = img.transpose(2, 0, 1)  # CHW로 변환 [C, H, W]
+                    img = torch.from_numpy(img)
+                # 텐서인 경우 형식 확인 및 변환
+                else:
+                    # HWC 형식인지 확인 (마지막 차원이 3인 경우)
+                    if img.dim() == 3 and img.shape[-1] == 3:  # HWC 형식
+                        img = img.permute(2, 0, 1)  # CHW로 변환
+                tensor_imgs.append(img)
+            img_out_final.append(torch.stack(tensor_imgs))
         
         for i, l in enumerate(label_out):
             l[:, 0] = i  # 이미지 인덱스 추가

@@ -3,11 +3,10 @@
 Train a YOLOv5 model on a custom dataset. Models and datasets download automatically from the latest YOLOv5 release.
 
 Usage - Single-GPU training:
-    $ python train.py --data coco128.yaml --weights yolov5s.pt --img 640  # from pretrained (recommended)
-    $ python train.py --data coco128.yaml --weights '' --cfg yolov5s.yaml --img 640  # from scratch
+python train.py --data kaist-rgbt.yaml --weights yolov5s.pt --cfg models/yolov5s_kaist-rgbt.yaml --img 640 --workers 16 --entity $WANDB_ENTITY --project ped --multi-scale --quad --batch-size 32 --epochs 30 --device 3 --rgbt-aug-level 2 --name yolov5s-rgbt-2
 
 Usage - Multi-GPU DDP training:
-    $ python -m torch.distributed.run --nproc_per_node 4 --master_port 1 train.py --data coco128.yaml --weights yolov5s.pt --img 640 --device 0,1,2,3
+python -m torch.distributed.run --nproc_per_node 2 --master_port 12355 train.py --data kaist-rgbt.yaml --weights yolov5s.pt --img 640 --device 2,3 --cfg models/yolov5s_kaist-rgbt.yaml --workers 16 --name yolov5s-rgbt --entity $WANDB_ENTITY --project ped --multi-scale --quad --batch-size 32 --epochs 30
 
 Models:     https://github.com/ultralytics/yolov5/tree/master/models
 Datasets:   https://github.com/ultralytics/yolov5/tree/master/data
@@ -48,7 +47,7 @@ import val as validate  # for end-of-epoch mAP
 from models.experimental import attempt_load
 from models.yolo import Model
 from utils.autoanchor import check_anchors
-from utils.autobatch import check_train_batch_size
+# from utils.autobatch import check_train_batch_size
 from utils.callbacks import Callbacks
 from utils.dataloaders import create_dataloader
 from utils.downloads import attempt_download, is_url
@@ -237,6 +236,66 @@ def train(hyp, opt, device, callbacks):
             best_fitness, start_epoch, epochs = smart_resume(ckpt, optimizer, ema, weights, epochs, resume)
         del ckpt, csd
 
+     # Update hyperparameters for RGBT data
+    if True:  # Always apply RGBT-optimized hyperparameters
+        hyp['hsv_h'] = 0.015  # Reduced hue augmentation for thermal images
+        hyp['hsv_s'] = 0.4    # Moderate saturation augmentation
+        hyp['hsv_v'] = 0.4    # Moderate value augmentation
+        hyp['degrees'] = 5.0   # Limited rotation to maintain alignment
+        hyp['translate'] = 0.05 # Limited translation to maintain alignment
+        hyp['scale'] = 0.05   # Limited scaling to maintain alignment
+        hyp['shear'] = 0.0    # No shear to maintain alignment
+        hyp['perspective'] = 0.0 # No perspective to maintain alignment
+        hyp['mixup'] = 0.1    # Reduced mixup probability
+        hyp['mosaic'] = 0.3   # Reduced mosaic probability
+        
+    # RGBT 데이터를 위한 augmentation 단계적 적용 설정 추가
+    # 성능 개선을 위한 augmentation 단계 설정
+    # 0: augmentation 없음 - 기준 성능을 위해
+    # 1: 가벼운 augmentation - 정렬 유지에 중점
+    # 2: 중간 수준 augmentation - 좋은 균형점
+    # 3: 전체 augmentation - 원래 설정 (매우 강한 증강)
+    rgbt_aug_level = opt.rgbt_aug_level
+
+    
+    # 단계별 augmentation 설정
+    if rgbt_aug_level > 0:
+        # 단계 1: 가벼운 augmentation - RGBT 정렬 유지를 위한 매우 약한 증강
+        if rgbt_aug_level == 1:
+            hyp['degrees'] = 0.0      # 회전 없음 - 정렬을 엄격하게 유지
+            hyp['translate'] = 0.0    # 이동 변환 없음
+            hyp['scale'] = 0.0        # 크기 변환 없음
+            hyp['shear'] = 0.0        # 전단 변환 없음
+            hyp['perspective'] = 0.0  # 원근 변환 없음
+            hyp['hsv_h'] = 0.01      # 색상(hue) 변화 최소화
+            hyp['hsv_s'] = 0.1       # 채도(saturation) 변화 최소화 
+            hyp['hsv_v'] = 0.1       # 밝기(value) 변화 최소화
+            hyp['flipud'] = 0.0       # 상하 반전 없음
+            hyp['mixup'] = 0.0        # 믹스업 없음
+            print('\nRGBT Level 1: 가벼운 augmentation 적용 - 정렬 유지에 중점\n')
+            
+        # 단계 2: 중간 수준 augmentation 
+        elif rgbt_aug_level == 2:
+            hyp['degrees'] = 2.0      # 약한 회전만 허용
+            hyp['translate'] = 0.02   # 약한 이동만 허용
+            hyp['scale'] = 0.02       # 약한 크기 변환만 허용
+            hyp['shear'] = 0.0        # 전단 변환 없음
+            hyp['perspective'] = 0.0  # 원근 변환 없음
+            hyp['hsv_h'] = 0.015     # 약한 색상 변화
+            hyp['hsv_s'] = 0.2       # 중간 채도 변화
+            hyp['hsv_v'] = 0.2       # 중간 밝기 변화
+            hyp['flipud'] = 0.0       # 상하 반전 없음
+            hyp['mixup'] = 0.05       # 약한 믹스업만 허용
+            print('\nRGBT Level 2: 중간 수준 augmentation 적용\n')
+            
+        # 단계 3: 전체 augmentation
+        elif rgbt_aug_level == 3:
+            # 원래 기본 설정 유지
+            print('\nRGBT Level 3: 전체 augmentation 적용\n')
+    else:
+        # 단계 0: augmentation 없음
+        print('\nRGBT Level 0: augmentation 없음 - 기준 성능 측정\n')
+
     # DP mode
     if cuda and RANK == -1 and torch.cuda.device_count() > 1:
         LOGGER.warning(
@@ -268,8 +327,19 @@ def train(hyp, opt, device, callbacks):
         prefix=colorstr("train: "),
         shuffle=True,
         seed=opt.seed,
+        rgbt_input=True,
     )
     labels = np.concatenate(dataset.labels, 0)
+
+    if opt.image_weights:
+        # 클래스 빈도에 기반한 이미지 가중치 생성
+        if nc > 1:
+            LOGGER.info('이미지 가중치 활성화: 클래스 불균형 처리중...')
+            cw = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # 클래스 가중치 (원본 레이블 전달)
+            iw = labels_to_image_weights(dataset.labels, nc, cw.cpu())  # CPU로 변환한 후 이미지 가중치 계산
+            dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # 가중치 기반 선택
+
+
     mlc = int(labels[:, 0].max())  # max label class
     assert mlc < nc, f"Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}"
 
@@ -283,11 +353,12 @@ def train(hyp, opt, device, callbacks):
             single_cls,
             hyp=hyp,
             cache=None if noval else opt.cache,
-            rect=True,
+            rect=False,
             rank=-1,
             workers=workers * 2,
             pad=0.5,
             prefix=colorstr("val: "),
+            rgbt_input=True,
         )[0]
 
         if not resume:
@@ -347,10 +418,15 @@ def train(hyp, opt, device, callbacks):
         if RANK in {-1, 0}:
             pbar = tqdm(pbar, total=nb, bar_format=TQDM_BAR_FORMAT)  # progress bar
         optimizer.zero_grad()
-        for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+        for i, (imgs, targets, paths, shapes, indices) in pbar:  # batch -------------------------------------------------------------
             callbacks.run("on_train_batch_start")
             ni = i + nb * epoch  # number integrated batches (since train start)
-            imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
+            # Handle multiple modalities (RGBT input)
+            if isinstance(imgs, (list, tuple)):
+                # Move each modality tensor to device
+                imgs = [img.to(device, non_blocking=True).float() / 255 for img in imgs]  # uint8 to float32, 0-255 to 0.0-1.0
+            else:
+                imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
 
             # Warmup
             if ni <= nw:
@@ -366,10 +442,17 @@ def train(hyp, opt, device, callbacks):
             # Multi-scale
             if opt.multi_scale:
                 sz = random.randrange(int(imgsz * 0.5), int(imgsz * 1.5) + gs) // gs * gs  # size
-                sf = sz / max(imgs.shape[2:])  # scale factor
-                if sf != 1:
-                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
-                    imgs = nn.functional.interpolate(imgs, size=ns, mode="bilinear", align_corners=False)
+                if isinstance(imgs, list):  # RGBT input (list of tensors)
+                    for i in range(len(imgs)):
+                        sf = sz / max(imgs[i].shape[2:])  # scale factor
+                        if sf != 1:
+                            ns = [math.ceil(x * sf / gs) * gs for x in imgs[i].shape[2:]]  # new shape (stretched to gs-multiple)
+                            imgs[i] = nn.functional.interpolate(imgs[i], size=ns, mode="bilinear", align_corners=False)
+                else:  # Standard single tensor input
+                    sf = sz / max(imgs.shape[2:])  # scale factor
+                    if sf != 1:
+                        ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
+                        imgs = nn.functional.interpolate(imgs, size=ns, mode="bilinear", align_corners=False)
 
             # Forward
             with torch.cuda.amp.autocast(amp):
@@ -398,9 +481,11 @@ def train(hyp, opt, device, callbacks):
             if RANK in {-1, 0}:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = f"{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G"  # (GB)
+                # Handle progress logging for both single tensor and list of tensors (RGBT case)
+                img_size = imgs[0].shape[-1] if isinstance(imgs, list) else imgs.shape[-1]
                 pbar.set_description(
                     ("%11s" * 2 + "%11.4g" * 5)
-                    % (f"{epoch}/{epochs - 1}", mem, *mloss, targets.shape[0], imgs.shape[-1])
+                    % (f"{epoch}/{epochs - 1}", mem, *mloss, targets.shape[0], img_size)
                 )
                 callbacks.run("on_train_batch_end", model, ni, imgs, targets, paths, list(mloss))
                 if callbacks.stop_training:
@@ -424,11 +509,13 @@ def train(hyp, opt, device, callbacks):
                     half=amp,
                     model=ema.ema,
                     single_cls=single_cls,
+                    save_json=True,
                     dataloader=val_loader,
                     save_dir=save_dir,
-                    plots=False,
+                    plots=True,
                     callbacks=callbacks,
                     compute_loss=compute_loss,
+                    epoch=epoch,
                 )
 
             # Update best mAP
@@ -485,13 +572,13 @@ def train(hyp, opt, device, callbacks):
                         batch_size=batch_size // WORLD_SIZE * 2,
                         imgsz=imgsz,
                         model=attempt_load(f, device).half(),
-                        iou_thres=0.65 if is_coco else 0.60,  # best pycocotools at iou 0.65
+                        iou_thres=0.65 if is_coco else 0.35,  # best pycocotools at iou 0.65
                         single_cls=single_cls,
                         dataloader=val_loader,
                         save_dir=save_dir,
-                        save_json=is_coco,
+                        save_json=True,
                         verbose=True,
-                        plots=plots,
+                        plots=False,
                         callbacks=callbacks,
                         compute_loss=compute_loss,
                     )  # val best model with plots
@@ -555,6 +642,10 @@ def parse_opt(known=False):
     # NDJSON logging
     parser.add_argument("--ndjson-console", action="store_true", help="Log ndjson to console")
     parser.add_argument("--ndjson-file", action="store_true", help="Log ndjson to file")
+    
+    # RGBT augmentation level
+    parser.add_argument("--rgbt-aug-level", type=int, default=0, choices=[0, 1, 2, 3],
+                        help="RGBT augmentation level (0: none, 1: light, 2: medium, 3: full)")
 
     return parser.parse_known_args()[0] if known else parser.parse_args()
 
