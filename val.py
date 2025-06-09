@@ -142,6 +142,7 @@ def run(
     exist_ok=False,  # existing project/name ok, do not increment
     half=True,  # use FP16 half-precision inference
     dnn=False,  # use OpenCV DNN for ONNX inference
+    rgbt_input=False,  # enable RGBT (RGB-Thermal) evaluation mode
     model=None,
     dataloader=None,
     save_dir=Path(""),
@@ -195,9 +196,19 @@ def run(
                 f"{weights} ({ncm} classes) trained on different --data than what you passed ({nc} "
                 f"classes). Pass correct combination of --weights and --data that are trained together."
             )
-        model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz))  # warmup
+        # Modify warmup for RGBT models if rgbt_input flag is enabled
+        if rgbt_input:
+            # Create dummy inputs for both RGB and Thermal images
+            dummy_rgb = torch.zeros((1 if pt else batch_size, 3, imgsz, imgsz), device=device)
+            dummy_thermal = torch.zeros((1 if pt else batch_size, 3, imgsz, imgsz), device=device)
+            # Warmup with both inputs
+            model.model([dummy_rgb, dummy_thermal])
+            LOGGER.info("RGBT mode enabled: Using both RGB and Thermal inputs")
+        else:
+            model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz))  # warmup for RGB only
         pad, rect = (0.0, False) if task == "speed" else (0.5, pt)  # square inference for benchmarks
         task = task if task in ("train", "val", "test") else "val"  # path to train/val/test images
+        # Create dataloader with RGBT option if enabled
         dataloader = create_dataloader(
             data[task],
             imgsz,
@@ -205,9 +216,10 @@ def run(
             stride,
             single_cls,
             pad=pad,
-            rect=rect,
+            rect=False,
             workers=workers,
             prefix=colorstr(f"{task}: "),
+            rgbt_input=rgbt_input  # Pass rgbt_input flag to dataloader
         )[0]
 
     seen = 0
@@ -227,12 +239,13 @@ def run(
     for batch_i, (ims, targets, paths, shapes, indices) in enumerate(pbar):
         callbacks.run("on_val_batch_start")
         with dt[0]:
-            if isinstance(ims, list):
-                ims = [im.to(device, non_blocking=True).float() / 255 for im in ims]    # For RGB-T input
+            # Handle RGBT inputs (both RGB and thermal images)
+            if isinstance(ims, list):  # For RGBT input
+                ims = [im.to(device, non_blocking=True).float() / 255 for im in ims]  # For RGB-T input
                 nb, _, height, width = ims[0].shape  # batch size, channels, height, width
                 if half:
                     ims = [im.half() for im in ims]
-            else:
+            else:  # Regular RGB input
                 ims = ims.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
                 nb, _, height, width = ims.shape  # batch size, channels, height, width
                 if half:
@@ -392,6 +405,7 @@ def parse_opt():
     parser.add_argument("--single-cls", action="store_true", help="treat as single-class dataset")
     parser.add_argument("--augment", action="store_true", help="augmented inference")
     parser.add_argument("--verbose", action="store_true", help="report mAP by class")
+    parser.add_argument("--rgbt_input", action="store_true", help="enable RGBT (RGB-Thermal) evaluation mode")
     parser.add_argument("--save-txt", action="store_true", help="save results to *.txt")
     parser.add_argument("--save-hybrid", action="store_true", help="save label+prediction hybrid results to *.txt")
     parser.add_argument("--save-conf", action="store_true", help="save confidences in --save-txt labels")

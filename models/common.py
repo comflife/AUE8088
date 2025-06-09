@@ -712,11 +712,35 @@ class DetectMultiBackend(nn.Module):
 
     def forward(self, im, augment=False, visualize=False):
         """Performs YOLOv5 inference on input images with options for augmentation and visualization."""
-        b, ch, h, w = im.shape  # batch, channel, height, width
-        if self.fp16 and im.dtype != torch.float16:
-            im = im.half()  # to FP16
-        if self.nhwc:
-            im = im.permute(0, 2, 3, 1)  # torch BCHW to numpy BHWC shape(1,320,192,3)
+        # Handle RGBT inputs (list of [rgb_image, thermal_image])
+        if isinstance(im, list):
+            # Extract RGB and Thermal images
+            rgb_im, thermal_im = im
+            
+            # Get shape from the first tensor (RGB)
+            b, ch, h, w = rgb_im.shape  # batch, channel, height, width
+            
+            # Apply FP16 conversion if needed
+            if self.fp16:
+                if rgb_im.dtype != torch.float16:
+                    rgb_im = rgb_im.half()  # to FP16
+                if thermal_im.dtype != torch.float16:
+                    thermal_im = thermal_im.half()  # to FP16
+                    
+            # Apply NHWC conversion if needed        
+            if self.nhwc:
+                rgb_im = rgb_im.permute(0, 2, 3, 1)  # torch BCHW to numpy BHWC shape(1,320,192,3)
+                thermal_im = thermal_im.permute(0, 2, 3, 1)
+                
+            # Update im to be the list of processed tensors
+            im = [rgb_im, thermal_im]
+        else:
+            # Standard single image processing
+            b, ch, h, w = im.shape  # batch, channel, height, width
+            if self.fp16 and im.dtype != torch.float16:
+                im = im.half()  # to FP16
+            if self.nhwc:
+                im = im.permute(0, 2, 3, 1)  # torch BCHW to numpy BHWC shape(1,320,192,3)
 
         if self.pt:  # PyTorch
             y = self.model(im, augment=augment, visualize=visualize) if augment or visualize else self.model(im)

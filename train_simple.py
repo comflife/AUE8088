@@ -1,12 +1,7 @@
 # YOLOv5 🚀 by Ultralytics, AGPL-3.0 license
 """
-Train a YOLOv5 model on a custom dataset.
+python train_simple.py --data kaist-rgbt.yaml --weights yolov5s.pt --cfg models/yolov5s_kaist-rgbt.yaml --img 640 --workers 16 --entity $WANDB_ENTITY --project ped --quad --evolve --image-weights --multi-scale --batch-size 32 --epochs 30 --device 3 --name yolov5s-rgbt-10
 
-Usage - Single-GPU training:
-    $ python train.py --data kitti.yaml --weights yolov5s.pt --img 640  # from pretrained (recommended)
-    $ python train.py --data nuscenes.yaml --weights '' --cfg yolov5s.yaml --img 400  # from scratch
-
-Usage - Multi-GPU DDP training: Not Supported - Please use "train.py"
 """
 
 import argparse
@@ -177,67 +172,10 @@ def train(hyp, opt, device, callbacks):
 
     # Resume
     best_fitness, start_epoch = 0.0, 0
-
-
-    # Update hyperparameters for RGBT data
-    if True:  # Always apply RGBT-optimized hyperparameters
-        hyp['hsv_h'] = 0.015  # Reduced hue augmentation for thermal images
-        hyp['hsv_s'] = 0.4    # Moderate saturation augmentation
-        hyp['hsv_v'] = 0.4    # Moderate value augmentation
-        hyp['degrees'] = 5.0   # Limited rotation to maintain alignment
-        hyp['translate'] = 0.05 # Limited translation to maintain alignment
-        hyp['scale'] = 0.05   # Limited scaling to maintain alignment
-        hyp['shear'] = 0.0    # No shear to maintain alignment
-        hyp['perspective'] = 0.0 # No perspective to maintain alignment
-        hyp['mixup'] = 0.1    # Reduced mixup probability
-        hyp['mosaic'] = 0.3   # Reduced mosaic probability
-        
-    # RGBT 데이터를 위한 augmentation 단계적 적용 설정 추가
-    # 성능 개선을 위한 augmentation 단계 설정
-    # 0: augmentation 없음 - 기준 성능을 위해
-    # 1: 가벼운 augmentation - 정렬 유지에 중점
-    # 2: 중간 수준 augmentation - 좋은 균형점
-    # 3: 전체 augmentation - 원래 설정 (매우 강한 증강)
-    rgbt_aug_level = 0
-
     
-    # 단계별 augmentation 설정
-    if rgbt_aug_level > 0:
-        # 단계 1: 가벼운 augmentation - RGBT 정렬 유지를 위한 매우 약한 증강
-        if rgbt_aug_level == 1:
-            hyp['degrees'] = 0.0      # 회전 없음 - 정렬을 엄격하게 유지
-            hyp['translate'] = 0.0    # 이동 변환 없음
-            hyp['scale'] = 0.0        # 크기 변환 없음
-            hyp['shear'] = 0.0        # 전단 변환 없음
-            hyp['perspective'] = 0.0  # 원근 변환 없음
-            hyp['hsv_h'] = 0.01      # 색상(hue) 변화 최소화
-            hyp['hsv_s'] = 0.1       # 채도(saturation) 변화 최소화 
-            hyp['hsv_v'] = 0.1       # 밝기(value) 변화 최소화
-            hyp['flipud'] = 0.0       # 상하 반전 없음
-            hyp['mixup'] = 0.0        # 믹스업 없음
-            print('\nRGBT Level 1: 가벼운 augmentation 적용 - 정렬 유지에 중점\n')
-            
-        # 단계 2: 중간 수준 augmentation - 좋은 균형점
-        elif rgbt_aug_level == 2:
-            hyp['degrees'] = 2.0      # 약한 회전만 허용
-            hyp['translate'] = 0.02   # 약한 이동만 허용
-            hyp['scale'] = 0.02       # 약한 크기 변환만 허용
-            hyp['shear'] = 0.0        # 전단 변환 없음
-            hyp['perspective'] = 0.0  # 원근 변환 없음
-            hyp['hsv_h'] = 0.015     # 약한 색상 변화
-            hyp['hsv_s'] = 0.2       # 중간 채도 변화
-            hyp['hsv_v'] = 0.2       # 중간 밝기 변화
-            hyp['flipud'] = 0.0       # 상하 반전 없음
-            hyp['mixup'] = 0.05       # 약한 믹스업만 허용
-            print('\nRGBT Level 2: 중간 수준 augmentation 적용\n')
-            
-        # 단계 3: 전체 augmentation
-        elif rgbt_aug_level == 3:
-            # 원래 기본 설정 유지
-            print('\nRGBT Level 3: 전체 augmentation 적용\n')
-    else:
-        # 단계 0: augmentation 없음
-        print('\nRGBT Level 0: augmentation 없음 - 기준 성능 측정\n')
+    # YAML 파일에서 불러온 하이퍼파라미터 사용
+    if hasattr(opt, 'rgbt') and opt.rgbt:
+        print(f'\nRGBT 모드 활성화 - YAML 하이퍼파라미터 사용: {opt.hyp}\n')
     
     # Trainloader
     train_loader, dataset = create_dataloader(
@@ -247,9 +185,9 @@ def train(hyp, opt, device, callbacks):
         gs,
         single_cls,
         hyp=hyp,
-        augment=rgbt_aug_level > 0,
+        augment=True,
         cache=None if opt.cache == "val" else opt.cache,
-        rect=opt.rect,
+        rect=False,
         rank=-1,
         workers=workers,
         image_weights=opt.image_weights,  # 이미지 가중치 옵션 지원

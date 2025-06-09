@@ -3,10 +3,7 @@
 Train a YOLOv5 model on a custom dataset. Models and datasets download automatically from the latest YOLOv5 release.
 
 Usage - Single-GPU training:
-python train.py --data kaist-rgbt.yaml --weights yolov5s.pt --cfg models/yolov5s_kaist-rgbt.yaml --img 640 --workers 16 --entity $WANDB_ENTITY --project ped --multi-scale --quad --batch-size 32 --epochs 30 --device 3 --rgbt-aug-level 2 --name yolov5s-rgbt-2
-
-Usage - Multi-GPU DDP training:
-python -m torch.distributed.run --nproc_per_node 2 --master_port 12355 train.py --data kaist-rgbt.yaml --weights yolov5s.pt --img 640 --device 2,3 --cfg models/yolov5s_kaist-rgbt.yaml --workers 16 --name yolov5s-rgbt --entity $WANDB_ENTITY --project ped --multi-scale --quad --batch-size 32 --epochs 30
+python train_simple.py --data kaist-rgbt.yaml --weights yolov5s.pt --cfg models/yolov5s_kaist-rgbt.yaml --img 640 --workers 16 --entity $WANDB_ENTITY --project ped --quad --evolve --image-weights --multi-scale --freeze 0 --batch-size 32 --epochs 30 --device 3 --rgbt-aug-level 0 --name yolov5s-rgbt-10
 
 Models:     https://github.com/ultralytics/yolov5/tree/master/models
 Datasets:   https://github.com/ultralytics/yolov5/tree/master/data
@@ -319,7 +316,7 @@ def train(hyp, opt, device, callbacks):
         hyp=hyp,
         augment=True,
         cache=None if opt.cache == "val" else opt.cache,
-        rect=opt.rect,
+        rect=False,
         rank=LOCAL_RANK,
         workers=workers,
         image_weights=opt.image_weights,
