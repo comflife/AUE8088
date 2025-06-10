@@ -788,58 +788,125 @@ class LoadImagesAndLabels(Dataset):
     #     #self.shuffled_vector = np.random.permutation(self.nF) if self.augment else np.arange(self.nF)
     #     return self
 
-    def __getitem__(self, index):
-        """Fetches the dataset item at the given index, considering linear, shuffled, or weighted sampling."""
-        index = self.indices[index]  # linear, shuffled, or image_weights
+    # def __getitem__(self, index):
+    #     """Fetches the dataset item at the given index, considering linear, shuffled, or weighted sampling."""
+    #     index = self.indices[index]  # linear, shuffled, or image_weights
 
+    #     hyp = self.hyp
+    #     mosaic = self.mosaic and random.random() < 0.3  # Reduced mosaic probability for RGBT data
+    #     if mosaic:
+    #         # Load mosaic
+    #         img, labels = self.load_mosaic(index)
+    #         shapes = None
+
+    #         # MixUp augmentation - reduced probability for RGBT
+    #         if random.random() < hyp.get('mixup', 0.1) * 0.5:  # Reduced mixup probability
+    #             img_2, labels_2 = self.load_mosaic(random.randint(0, self.n - 1))
+    #             img, labels = self.mixup_rgbt(img, labels, img_2, labels_2)
+
+    #     else:
+    #         # Load image
+    #         img, (h0, w0), (h, w) = self.load_image(index)
+
+    #         # Letterbox
+    #         shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
+    #         img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+    #         shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
+
+    #         labels = self.labels[index].copy()
+    #         if labels.size:  # normalized xywh to pixel xyxy format
+    #             labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
+
+    #         if self.augment:
+    #             # Apply RGBT-friendly augmentations
+    #             img, labels = self.rgbt_friendly_augment(img, labels)
+
+    #     # Update normalized labels
+    #     nL = len(labels)  # number of labels
+    #     if nL:
+    #         labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
+        
+    #     # Apply albumentations if available
+    #     if self.augment and hasattr(self, 'albumentations') and self.albumentations:
+    #         img, labels = self.albumentations(img, labels)
+    #         nL = len(labels)  # update after albumentations
+
+    #     labels_out = torch.zeros((nL, 6))
+    #     if nL:
+    #         labels_out[:, 1:] = torch.from_numpy(labels)
+
+    #     # Convert
+    #     img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+    #     img = np.ascontiguousarray(img)
+
+    #     return torch.from_numpy(img), labels_out, self.im_files[index], shapes
+
+    def __getitem__(self, index):
+        """데이터셋에서 한 개의 아이템(이미지 및 라벨)을 가져옵니다."""
+        index = self.indices[index]  # linear, shuffled, or image_weights
         hyp = self.hyp
-        mosaic = self.mosaic and random.random() < 0.3  # Reduced mosaic probability for RGBT data
+        
+        mosaic = self.mosaic and random.random() < hyp.get("mosaic", 0.3)
+
         if mosaic:
-            # Load mosaic
-            img, labels = self.load_mosaic(index)
+            # 1. 모자이크 증강 적용
+            # imgs: [lwir, vis] 이미지 리스트
+            # labels: 픽셀 xyxy 좌표 형식의 라벨
+            imgs, labels = self.load_mosaic(index)
             shapes = None
 
-            # MixUp augmentation - reduced probability for RGBT
-            if random.random() < hyp.get('mixup', 0.1) * 0.5:  # Reduced mixup probability
-                img_2, labels_2 = self.load_mosaic(random.randint(0, self.n - 1))
-                img, labels = self.mixup_rgbt(img, labels, img_2, labels_2)
+            # (선택) MixUp 증강
+            if random.random() < hyp.get("mixup", 0.0):
+                imgs2, labels2 = self.load_mosaic(random.choice(self.indices))
+                imgs, labels = self.mixup_rgbt(imgs, labels, imgs2, labels2)
 
         else:
-            # Load image
-            img, (h0, w0), (h, w) = self.load_image(index)
+            # 2. 모자이크 미적용 시 (일반 증강)
+            imgs, (h0s, w0s), (hs, ws) = self.load_image(index)
+            # Letterbox 등 기본 변환 적용
 
-            # Letterbox
-            shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
-            img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
-            shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
+            img_list = []
+            final_shapes = []
+            for i, img in enumerate(imgs):
+                h0, w0 = h0s[i], w0s[i]
+                shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size
+                img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+                img_list.append(img)
+                final_shapes.append(((h0, w0), (ratio, pad)))
+            imgs = img_list
+            shapes = final_shapes[0] # 대표 shapes
 
             labels = self.labels[index].copy()
-            if labels.size:  # normalized xywh to pixel xyxy format
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
-
+            if labels.size:
+                # 정규화된 xywh를 픽셀 xyxy로 변환
+                w, h = imgs[0].shape[1], imgs[0].shape[0]
+                ratio, pad = final_shapes[0][1]
+                labels[:, 1:5] = xywhn2xyxy(labels[:, 1:5], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
+            
+            # (선택) 비-모자이크 증강 (random_perspective 등)
             if self.augment:
-                # Apply RGBT-friendly augmentations
-                img, labels = self.rgbt_friendly_augment(img, labels)
+                # 두 이미지를 합쳐서 증강 후 다시 분리
+                combined_img = np.concatenate(imgs, axis=2)
+                combined_img, labels = random_perspective(combined_img, labels, **self.hyp)
+                imgs = [combined_img[:, :, :3], combined_img[:, :, 3:]]
 
-        # Update normalized labels
-        nL = len(labels)  # number of labels
-        if nL:
-            labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
+        # --- 공통 후처리 과정 ---
         
-        # Apply albumentations if available
-        if self.augment and hasattr(self, 'albumentations') and self.albumentations:
-            img, labels = self.albumentations(img, labels)
-            nL = len(labels)  # update after albumentations
-
-        labels_out = torch.zeros((nL, 6))
-        if nL:
+        # 3. **핵심**: 라벨을 최종 형식으로 변환
+        nl = len(labels)
+        labels_out = torch.zeros((nl, 6)) # (batch_idx, class, x, y, w, h)
+        if nl:
+            labels[:, 1:5] = np.round(labels[:, 1:5]) 
+            labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=self.img_size, h=self.img_size, clip=True, eps=1e-3)
             labels_out[:, 1:] = torch.from_numpy(labels)
 
-        # Convert
-        img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
-        img = np.ascontiguousarray(img)
+        # 4. 이미지를 CHW 형식의 텐서로 변환
+        final_imgs = []
+        for img in imgs:
+            img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+            final_imgs.append(np.ascontiguousarray(img))
 
-        return torch.from_numpy(img), labels_out, self.im_files[index], shapes
+        return final_imgs, labels_out, self.im_files[index], shapes, index
         
     def rgbt_friendly_augment(self, img, labels):
         """Apply augmentation methods suitable for RGBT data that maintain alignment between modalities"""
@@ -910,86 +977,84 @@ class LoadImagesAndLabels(Dataset):
         if not f.exists():
             np.save(f.as_posix(), cv2.imread(self.im_files[i]))
 
+
     def load_mosaic(self, index):
-        """Loads a 4-image mosaic for YOLOv5, combining 1 selected and 3 random images, with labels and segments."""
-        labels4, segments4 = [], []
-        s = self.img_size
-        yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border)  # mosaic center x, y
-        indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
-        random.shuffle(indices)
-        for i, index in enumerate(indices):
-            # Load image
-            img, _, (h, w) = self.load_image(index)
+            """
+            RGBT 데이터(lwir, visible)를 위한 모자이크 증강을 수행합니다.
+            4개의 이미지를 조합하고, 두 모달리티 간의 정렬을 완벽하게 유지하며 증강을 적용합니다.
+            """
+            labels4 = []
+            s = self.img_size
+            # 모자이크의 중심점 (xc, yc)을 랜덤하게 설정
+            # yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border)
+            yc, xc = (round(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border)
+            # 현재 인덱스 1개 + 랜덤 인덱스 3개 선택
+            indices = [index] + random.choices(self.indices, k=3)
 
-            # place img in img4
-            if i == 0:  # top left
-                img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
-                x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
-                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
-            elif i == 1:  # top right
-                x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
-                x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
-            elif i == 2:  # bottom left
-                x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
-                x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
-            elif i == 3:  # bottom right
-                x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
-                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+            # 1. 각 모달리티를 위한 빈 모자이크 캔버스 생성 (2s x 2s 크기)
+            mosaic_lwir = np.full((s * 2, s * 2, 3), 114, dtype=np.uint8)
+            mosaic_vis = np.full((s * 2, s * 2, 3), 114, dtype=np.uint8)
 
-            img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
-            padw = x1a - x1b
-            padh = y1a - y1b
+            # 2. 4개의 이미지를 반복하며 모자이크 구성
+            for i, idx in enumerate(indices):
+                # load_image는 [lwir, visible] 이미지 리스트를 반환
+                imgs, _, _ = self.load_image(idx)
+                lwir_img, vis_img = imgs[0], imgs[1]
+                h, w = lwir_img.shape[:2]  # 두 이미지 크기는 동일
 
-            # Labels
-            labels, segments = self.labels[index].copy(), self.segments[index].copy()
-            if labels.size:
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
-                segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
-            labels4.append(labels)
-            segments4.extend(segments)
+                # 모자이크 내에 이미지를 배치할 좌표 계산
+                if i == 0:  # Top-left
+                    x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc
+                elif i == 1:  # Top-right
+                    x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
+                elif i == 2:  # Bottom-left
+                    x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
+                else:  # Bottom-right
+                    x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
 
-        # Concat/clip labels
-        if len(labels4):
+                # 원본 이미지에서 잘라낼 영역 계산
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h
+
+                # 모자이크 캔버스에 이미지 붙여넣기
+                mosaic_lwir[y1a:y2a, x1a:x2a] = lwir_img[y1b:y2b, x1b:x2b]
+                mosaic_vis[y1a:y2a, x1a:x2a] = vis_img[y1b:y2b, x1b:x2b]
+                
+                # 라벨 좌표를 모자이크 기준 픽셀 좌표(xyxy)로 변환
+                padw, padh = x1a - x1b, y1a - y1b
+                labels = self.labels[idx].copy()
+                if labels.size:
+                    # KAIST 라벨(cls, x, y, w, h, occ)을 xyxy 픽셀 좌표로 변환
+                    labels[:, 1:5] = xywhn2xyxy(labels[:, 1:5], w, h, padw, padh)
+                labels4.append(labels)
+
+            # 3. 모든 라벨을 하나의 배열로 통합하고, 모자이크 캔버스 밖으로 나가는 좌표 정리
             labels4 = np.concatenate(labels4, 0)
-            
-            # 좌표 클리핑
-            np.clip(labels4[:, 1:], 0, 2 * s, out=labels4[:, 1:])  # use with random_affine
-            
-            # 정규화된 좌표로 변환 (xyxy → xywh 정규화)
-            labels4[:, 1:5] = xyxy2xywhn(labels4[:, 1:5], w=2*s, h=2*s)
-            
-            # 유효한 바운딩 박스만 필터링 (너비/높이 > 0)
-            labels4 = labels4[labels4[:, 3] > 0]
-            labels4 = labels4[labels4[:, 4] > 0]
-            
-            # 클래스가 유효한 레이블만 필터링 (클래스 >= 0)
-            labels4 = labels4[labels4[:, 0] >= 0]
-            
-            # 디버깅용 출력
-            # print("[DEBUG] load_mosaic 좌표 정규화 및 필터링 후 labels4.shape:", labels4.shape if isinstance(labels4, np.ndarray) else "배열 아님")
-            # print("[DEBUG] load_mosaic 정규화된 좌표 형식 (xywhn) 첫 5개 labels4:\n", labels4[:5] if len(labels4) >= 5 else labels4)
-            
-            # 다시 픽셀 좌표로 변환 (실제 이미지 크기에 맞게)
-            labels4[:, 1:5] = xywhn2xyxy(labels4[:, 1:5], w=2*s, h=2*s)
-        # img4, labels4 = replicate(img4, labels4)  # replicate
+            # KAIST 라벨의 occlusion level 열은 제외
+            labels4 = labels4[:, :5]
+            for x in labels4[:, 1:5]:
+                np.clip(x, 0, 2 * s, out=x)
 
-        # Augment
-        img4, labels4, segments4 = copy_paste(img4, labels4, segments4, p=self.hyp["copy_paste"])
-        img4, labels4 = random_perspective(
-            img4,
-            labels4,
-            segments4,
-            degrees=self.hyp["degrees"],
-            translate=self.hyp["translate"],
-            scale=self.hyp["scale"],
-            shear=self.hyp["shear"],
-            perspective=self.hyp["perspective"],
-            border=self.mosaic_border,
-        )  # border to remove
+            # 4. **핵심**: 두 모달리티를 합쳐 6채널 이미지로 만든 후, 증강을 '한 번만' 적용
+            # 이렇게 해야 LWIR과 Visible 이미지 간의 정렬이 깨지지 않음
+            mosaic_combined = np.concatenate((mosaic_lwir, mosaic_vis), axis=2)
+            
+            mosaic_combined, labels4 = random_perspective(
+                mosaic_combined,
+                labels=labels4,
+                degrees=self.hyp['degrees'],
+                translate=self.hyp['translate'],
+                scale=self.hyp['scale'],
+                shear=self.hyp['shear'],
+                perspective=self.hyp['perspective'],
+                border=self.mosaic_border, # [-s // 2, -s // 2]
+            )
 
-        # print("[DEBUG] load_mosaic 함수 종료, 반환 이미지 개수:", len(img4))
-        # print("[DEBUG] load_mosaic 반환 labels4.shape:", labels4.shape if isinstance(labels4, np.ndarray) else "배열 아님")
-        return img4, labels4
+            # 5. 증강된 6채널 이미지를 다시 두 개의 3채널 이미지로 분리
+            final_lwir = mosaic_combined[:, :, :3]
+            final_vis = mosaic_combined[:, :, 3:]
+            
+            return [final_lwir, final_vis], labels4
+
 
     def load_mosaic9(self, index):
         """Loads 1 image + 8 random images into a 9-image mosaic for augmented YOLOv5 training, returning labels and

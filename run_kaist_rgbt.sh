@@ -22,9 +22,7 @@ python3 train_simple.py \
     --quad \
     --evolve \
     --device 3 \
-    --noval \
-    --single-cls
-
+    --noval 
     # --image-weights \
     # --multi-scale \
 

@@ -8,7 +8,7 @@
 #     └── data ── kaist-rgbt.yaml
 
 # Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
-path: /home/byounggun/AUE8088
+path: /home/byounggun/AUE8088/datasets
 train: # train files info (relative to 'path') 12,538 images
   # - kaist-rgbt/train.txt
   - kaist-rgbt/train-all-04.txt
@@ -21,6 +21,6 @@ test: # test files info (optional)
 # Classes
 names:
   0: person
-  # 1: cyclist
-  # 2: people
-  # 3: person?
+  1: cyclist
+  2: people
+  3: person?
