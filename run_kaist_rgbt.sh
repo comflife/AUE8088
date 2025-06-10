@@ -8,7 +8,7 @@ export WANDB_ENTITY="comflife"
 echo "=== YOLOv5s RGBT 모델 학습 시작 ==="
 python3 train_simple.py \
     --img 640 \
-    --batch-size 64 \
+    --batch-size 12 \
     --epochs 25 \
     --data data/kaist-rgbt.yaml \
     --cfg models/yolov5s_kaist-rgbt.yaml \

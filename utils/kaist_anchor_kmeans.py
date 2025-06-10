@@ -6,7 +6,7 @@ from sklearn.cluster import KMeans
 # Directory containing YOLO .txt label files
 LABEL_DIR = os.path.join(os.path.dirname(__file__), '../kaist-rgbt/train/labels')
 NUM_ANCHORS = 9
-IGNORE_CLASS = 2  # 'People' class index
+IGNORE_CLASS = 1, 2, 3, -1  # 'People' class index
 
 # Gather all (w, h) for non-people boxes
 whs = []

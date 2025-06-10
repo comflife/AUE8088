@@ -2,7 +2,7 @@
 # Hyperparameters for RGBT data training from scratch
 # Fine-tuned for thermal and RGB alignment
 
-lr0: 0.02 # initial learning rate (SGD=1E-2, Adam=1E-3)
+lr0: 0.03 # initial learning rate (SGD=1E-2, Adam=1E-3)
 lrf: 0.12 # final OneCycleLR learning rate (lr0 * lrf)
 momentum: 0.937 # SGD momentum/Adam beta1
 weight_decay: 0.0004 # optimizer weight decay 5e-4
@@ -30,5 +30,5 @@ perspective: 0.0 # No perspective to maintain alignment
 flipud: 0.0 # No vertical flip
 fliplr: 0.5 # Horizontal flip is safe for RGBT alignment
 mosaic: 1.0 # Reduced mosaic probability for better alignment
-mixup: 0.2 # Reduced mixup probability
+mixup: 0.5 # Reduced mixup probability
 copy_paste: 0.0 # No copy-paste for RGBT data
