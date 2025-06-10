@@ -4,17 +4,17 @@
 # 환경변수 설정
 export WANDB_ENTITY="comflife" 
 
-# 학습 명령어 - yolov5n
-echo "=== YOLOv5n RGBT 모델 학습 시작 ==="
+# 학습 명령어 - yolov5s
+echo "=== YOLOv5s RGBT 모델 학습 시작 ==="
 python3 train_simple.py \
     --img 640 \
-    --batch-size 32 \
+    --batch-size 64 \
     --epochs 25 \
     --data data/kaist-rgbt.yaml \
-    --cfg models/yolov5n_kaist-rgbt.yaml \
-    --weights yolov5n.pt \
+    --cfg models/yolov5s_kaist-rgbt.yaml \
+    --weights yolov5s.pt \
     --workers 8 \
-    --name yolov5n-rgbt-new141 \
+    --name yolov5s-rgbt-new151 \
     --rgbt \
     --hyp data/hyps/hyp.scratch-rgbt.yaml \
     --entity $WANDB_ENTITY \
@@ -28,10 +28,10 @@ python3 train_simple.py \
     # --image-weights \
     # --multi-scale \
 
-# 검증 명령어 - yolov5n
-echo "=== YOLOv5n RGBT 모델 검증 시작 ==="
+# 검증 명령어 - yolov5s
+echo "=== YOLOv5s RGBT 모델 검증 시작 ==="
 python3 val.py \
-    --weights /home/byounggun/AUE8088/pedestrian/yolov5n-rgbt-new141/weights/best.pt \
+    --weights /home/byounggun/AUE8088/pedestrian/yolov5s-rgbt-new151/weights/best.pt \
     --data data/kaist-rgbt.yaml \
     --task test \
     --save-json \

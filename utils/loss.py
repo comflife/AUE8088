@@ -173,9 +173,18 @@ class ComputeLoss:
 
                 # Classification
                 if self.nc > 1:  # cls loss (only if multiple classes)
-                    t = torch.full_like(pcls, self.cn, device=self.device)  # targets
-                    t[range(n), tcls[i]] = self.cp
-                    lcls += self.BCEcls(pcls, t)  # BCE
+                    # 클래스가 -1인 경우 제외 (ignore class)
+                    valid_cls_mask = (tcls[i] != -1)
+                    if valid_cls_mask.any():  # 유효한 클래스가 있는 경우에만 계산
+                        # 유효한 클래스 인덱스만 선택
+                        valid_pcls = pcls[valid_cls_mask]
+                        valid_tcls = tcls[i][valid_cls_mask]
+                        n_valid = valid_cls_mask.sum()
+                        
+                        t = torch.full_like(valid_pcls, self.cn, device=self.device)  # targets
+                        t[range(n_valid), valid_tcls] = self.cp
+                        lcls += self.BCEcls(valid_pcls, t)  # BCE
+                    # 유효한 클래스가 없으면 손실 계산 건너뜀
 
                 # Append targets to text file
                 # with open('targets.txt', 'a') as file:

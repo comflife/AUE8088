@@ -611,7 +611,15 @@ class LoadImagesAndLabels(Dataset):
         self.labels, self.shapes, self.segments = [], [], []
 
         for ii, (im_file, label, shape, segment) in enumerate(cache['data']):
-            assert im_file == self.im_files[ii]
+            # For RGBT dataset, im_file might contain '{}' which need special handling
+            if isinstance(self, LoadRGBTImagesAndLabels) and '{}' in im_file:
+                # Only verify the path structure without the modality placeholder
+                cached_path = im_file.replace('{}', '*')
+                current_path = self.im_files[ii].replace('{}', '*')
+                assert cached_path == current_path, f"Cache path mismatch: {cached_path} vs {current_path}"
+            else:
+                # Standard verification for regular datasets
+                assert im_file == self.im_files[ii], f"Cache path mismatch: {im_file} vs {self.im_files[ii]}"
             self.labels.append(label)
             self.shapes.append(shape)
             self.segments.append(segment)
@@ -653,7 +661,10 @@ class LoadImagesAndLabels(Dataset):
                 if segment:
                     self.segments[i] = [segment[idx] for idx, elem in enumerate(j) if elem]
             
-            # People class is now included in training
+            # Set 'people' class (ID 2) to -1 to be ignored in loss calculation
+            # people_mask = (label[:, 0] == 2)
+            # if people_mask.any():
+            #     self.labels[i][people_mask, 0] = -1
             
             if single_cls:  # single-class training, merge all classes into 0
                 self.labels[i][:, 0] = 0
@@ -938,9 +949,28 @@ class LoadImagesAndLabels(Dataset):
             segments4.extend(segments)
 
         # Concat/clip labels
-        labels4 = np.concatenate(labels4, 0)
-        for x in (labels4[:, 1:], *segments4):
-            np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
+        if len(labels4):
+            labels4 = np.concatenate(labels4, 0)
+            
+            # 좌표 클리핑
+            np.clip(labels4[:, 1:], 0, 2 * s, out=labels4[:, 1:])  # use with random_affine
+            
+            # 정규화된 좌표로 변환 (xyxy → xywh 정규화)
+            labels4[:, 1:5] = xyxy2xywhn(labels4[:, 1:5], w=2*s, h=2*s)
+            
+            # 유효한 바운딩 박스만 필터링 (너비/높이 > 0)
+            labels4 = labels4[labels4[:, 3] > 0]
+            labels4 = labels4[labels4[:, 4] > 0]
+            
+            # 클래스가 유효한 레이블만 필터링 (클래스 >= 0)
+            labels4 = labels4[labels4[:, 0] >= 0]
+            
+            # 디버깅용 출력
+            # print("[DEBUG] load_mosaic 좌표 정규화 및 필터링 후 labels4.shape:", labels4.shape if isinstance(labels4, np.ndarray) else "배열 아님")
+            # print("[DEBUG] load_mosaic 정규화된 좌표 형식 (xywhn) 첫 5개 labels4:\n", labels4[:5] if len(labels4) >= 5 else labels4)
+            
+            # 다시 픽셀 좌표로 변환 (실제 이미지 크기에 맞게)
+            labels4[:, 1:5] = xywhn2xyxy(labels4[:, 1:5], w=2*s, h=2*s)
         # img4, labels4 = replicate(img4, labels4)  # replicate
 
         # Augment
@@ -957,6 +987,8 @@ class LoadImagesAndLabels(Dataset):
             border=self.mosaic_border,
         )  # border to remove
 
+        # print("[DEBUG] load_mosaic 함수 종료, 반환 이미지 개수:", len(img4))
+        # print("[DEBUG] load_mosaic 반환 labels4.shape:", labels4.shape if isinstance(labels4, np.ndarray) else "배열 아님")
         return img4, labels4
 
     def load_mosaic9(self, index):
@@ -1112,21 +1144,35 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         super().__init__(path, **kwargs)
 
         # Enhanced augmentation strategy for RGBT data
-        self.augment = kwargs.get('augment', False)
-        # Only use mosaic with reduced probability for RGBT data
-        self.mosaic = self.augment and random.random() < 0.3  # Reduced probability
+        self.augment = kwargs.get('augment', True)
+        # Use mosaic with probability from hyperparameters
+        mosaic_probability = self.hyp.get('mosaic', 0.3) if isinstance(self.hyp, dict) else 0.3
+        self.mosaic = self.augment and random.random() < mosaic_probability
         
         # Get hyperparameters from kwargs or use default values
-        self.hyp = kwargs.get('hyp', {})
-        # Control augmentation intensity for RGBT data
-        self.hsv_h = self.hyp.get('hsv_h', 0.015)  # Reduced HSV gains for RGBT
-        self.hsv_s = self.hyp.get('hsv_s', 0.4)
-        self.hsv_v = self.hyp.get('hsv_v', 0.4)
-        self.degrees = self.hyp.get('degrees', 5.0)  # Reduced rotation for alignment
-        self.translate = self.hyp.get('translate', 0.05)  # Reduced translation
-        self.scale = self.hyp.get('scale', 0.05)  # Reduced scaling
-        self.shear = self.hyp.get('shear', 0.0)  # No shear to maintain alignment
-        self.perspective = self.hyp.get('perspective', 0.0)  # No perspective to maintain alignment
+        # Ensure hyp is always a dictionary, even if None was provided
+        self.hyp = kwargs.get('hyp') or {}
+        
+        # Set default augmentation values for RGBT data with safety checks
+        self.hsv_h = 0.015  # Reduced HSV gains for RGBT
+        self.hsv_s = 0.4
+        self.hsv_v = 0.4
+        self.degrees = 5.0  # Reduced rotation for alignment
+        self.translate = 0.05  # Reduced translation
+        self.scale = 0.05  # Reduced scaling
+        self.shear = 0.0  # No shear to maintain alignment
+        self.perspective = 0.0  # No perspective to maintain alignment
+        
+        # Override defaults with values from hyp if they exist
+        if isinstance(self.hyp, dict):
+            self.hsv_h = self.hyp.get('hsv_h', self.hsv_h) 
+            self.hsv_s = self.hyp.get('hsv_s', self.hsv_s)
+            self.hsv_v = self.hyp.get('hsv_v', self.hsv_v)
+            self.degrees = self.hyp.get('degrees', self.degrees)
+            self.translate = self.hyp.get('translate', self.translate)
+            self.scale = self.hyp.get('scale', self.scale) 
+            self.shear = self.hyp.get('shear', self.shear)
+            self.perspective = self.hyp.get('perspective', self.perspective)
 
         # Set ignore flag
         cond = self.ignore_settings['train' if is_train else 'test']
@@ -1231,14 +1277,48 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp["mosaic"]
         if mosaic:
+            # print("[DEBUG] 모자이크 적용 분기 진입, mosaic=", mosaic)
 
             # Load mosaic for RGB-T images
             imgs, labels = self.load_mosaic(index)
+            # print("[DEBUG] load_mosaic 함수 호출 후 labels.shape:", labels.shape if isinstance(labels, np.ndarray) else "배열 아님")
             shapes = None
 
             # MixUp augmentation for RGB-T
             if random.random() < hyp["mixup"]:
                 imgs, labels = self.mixup_rgbt(imgs, labels, *self.load_mosaic(random.choice(self.indices)))
+
+            # 이미지를 PyTorch 텐서로 변환 (이 부분 추가)
+            for i in range(len(imgs)):
+                # numpy 배열 → PyTorch 텐서
+                img = imgs[i]
+                img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+                img = np.ascontiguousarray(img)
+                imgs[i] = torch.from_numpy(img)
+            
+            # 레이블 좌표를 정규화 (xyxy → xywhn)
+            if len(labels):
+                # 레이블에서 음수 클래스 필터링
+                labels = labels[labels[:, 0] >= 0]
+                
+                # YOLO 포맷을 위해 픽셀 좌표를 0-1 범위로 정규화
+                img_size = (640, 640)  # 모자이크 이미지 크기
+                labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img_size[1], h=img_size[0])
+                
+                # 너비와 높이가 0보다 큰 유효한 바운딩 박스만 유지
+                labels = labels[labels[:, 3] > 0]
+                labels = labels[labels[:, 4] > 0]
+                
+                # print("[DEBUG] __getitem__ 좌표 정규화 및 필터링 후 레이블 shape:", labels.shape)
+                # print("[DEBUG] __getitem__ 정규화된 좌표(xywhn) 첫 5개 레이블:\n", labels[:5] if len(labels) >= 5 else labels)
+            
+            nl = len(labels)  # number of labels
+            # print("[DEBUG] 모자이크 후 레이블 개수 nl:", nl)
+            labels_out = torch.zeros((nl, 7))
+            if nl:
+                labels_out[:, 1:] = torch.from_numpy(labels)
+                # print("[DEBUG] 최종 tensor로 변환 후 labels_out.shape:", labels_out.shape)
+                # print("[DEBUG] 최종 tensor로 변환 후 첫 5개 labels_out:\n", labels_out[:5] if nl >= 5 else labels_out)
 
         else:
             # Load image
@@ -1306,14 +1386,8 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
                 imgs[ii] = torch.from_numpy(img)
 
-        # Make sure labels_out is defined
-        try:
-            # Drop occlusion level if labels exist
-            labels_out = labels_out[:, :-1]
-        except UnboundLocalError:
-            # If no labels or labels_out not defined, create an empty tensor
-            labels_out = torch.zeros((0, 6))
-            
+        # Drop occlusion level
+        labels_out = labels_out[:, :-1]
         return imgs, labels_out, self.im_files[index], shapes, index
 
     def load_image(self, i):
@@ -1349,6 +1423,8 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
             return imgs, (h0s, w0s), img_shapes
 
         return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
+
+
 
 
     @staticmethod
@@ -1475,30 +1551,10 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         imgs_by_mod = [[] for _ in range(img_mod_count)]
         for i in range(len(img_out)):
             mod_idx = i % img_mod_count
-            # NumPy 배열을 텐서로 변환
-            if isinstance(img_out[i], np.ndarray):
-                img_out[i] = torch.from_numpy(img_out[i])
             imgs_by_mod[mod_idx].append(img_out[i])
             
-        # 최종 출력 형태로 변환 - 모든 이미지가 텐서인지 확인 및 차원 형식 통일
-        img_out_final = []
-        for imgs in imgs_by_mod:
-            # 각 이미지가 텐서인지 확인 및 변환
-            tensor_imgs = []
-            for img in imgs:
-                # NumPy 배열을 텐서로 변환
-                if isinstance(img, np.ndarray):
-                    # HWC에서 CHW 형식으로 변환
-                    if img.shape[-1] == 3:  # HWC 형식인 경우 [H, W, C]
-                        img = img.transpose(2, 0, 1)  # CHW로 변환 [C, H, W]
-                    img = torch.from_numpy(img)
-                # 텐서인 경우 형식 확인 및 변환
-                else:
-                    # HWC 형식인지 확인 (마지막 차원이 3인 경우)
-                    if img.dim() == 3 and img.shape[-1] == 3:  # HWC 형식
-                        img = img.permute(2, 0, 1)  # CHW로 변환
-                tensor_imgs.append(img)
-            img_out_final.append(torch.stack(tensor_imgs))
+        # 최종 출력 형태로 변환
+        img_out_final = [torch.stack(imgs) for imgs in imgs_by_mod] 
         
         for i, l in enumerate(label_out):
             l[:, 0] = i  # 이미지 인덱스 추가
