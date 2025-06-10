@@ -19,16 +19,16 @@ anchor_t: 4.0 # anchor-multiple threshold
 fl_gamma: 0.0 # focal loss gamma (efficientDet default gamma=1.5)
 
 # RGBT-optimized augmentation parameters
-hsv_h: 0.015 # Reduced hue augmentation for thermal images
-hsv_s: 0.4 # Moderate saturation augmentation
-hsv_v: 0.4 # Moderate value augmentation
-degrees: 0.5 # Limited rotation to maintain alignment
-translate: 0.1 # Limited translation to maintain alignment
-scale: 0.4 # Limited scaling to maintain alignment
+hsv_h: 0.0 # Reduced hue augmentation for thermal images
+hsv_s: 0.0 # Moderate saturation augmentation
+hsv_v: 0.0 # Moderate value augmentation
+degrees: 0.0 # Limited rotation to maintain alignment
+translate: 0.0 # Limited translation to maintain alignment
+scale: 0.0 # Limited scaling to maintain alignment
 shear: 0.0 # No shear to maintain alignment
 perspective: 0.0 # No perspective to maintain alignment
 flipud: 0.0 # No vertical flip
-fliplr: 0.5 # Horizontal flip is safe for RGBT alignment
+fliplr: 0.0 # Horizontal flip is safe for RGBT alignment
 mosaic: 1.0 # Reduced mosaic probability for better alignment
-mixup: 0.5 # Reduced mixup probability
+mixup: 0.0 # Reduced mixup probability
 copy_paste: 0.0 # No copy-paste for RGBT data

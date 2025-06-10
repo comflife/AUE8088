@@ -881,6 +881,25 @@ def xyxy2xywh(x):
     return y
 
 
+def ltwhn2xyxy(x, w=640, h=640, padw=0, padh=0):
+    """
+    Converts nx4 boxes from [x_topleft, y_topleft, width, height] normalized to [x1, y1, x2, y2] pixels.
+    """
+    y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
+    # De-normalize to pixel coordinates
+    y[:, 0] = x[:, 0] * w  # x1 = x_topleft * w
+    y[:, 1] = x[:, 1] * h  # y1 = y_topleft * h
+    y[:, 2] = (x[:, 0] + x[:, 2]) * w  # x2 = (x_topleft + width) * w
+    y[:, 3] = (x[:, 1] + x[:, 3]) * h  # y2 = (y_topleft + height) * h
+    
+    # Add padding for mosaic placement
+    y[:, 0] += padw
+    y[:, 1] += padh
+    y[:, 2] += padw
+    y[:, 3] += padh
+    return y
+
+
 def xywh2xyxy(x):
     """Convert nx4 boxes from [x, y, w, h] to [x1, y1, x2, y2] where xy1=top-left, xy2=bottom-right."""
     y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
