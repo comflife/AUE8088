@@ -115,6 +115,10 @@ class ComputeLoss:
 
         # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
         self.cp, self.cn = smooth_BCE(eps=h.get("label_smoothing", 0.0))  # positive, negative BCE targets
+        
+        # IoU type selection
+        self.use_ciou = h.get("use_ciou", False)  # use CIoU by default
+        self.use_piou = h.get("use_piou", True)  # PIoU is disabled by default
 
         # Focal loss
         g = h["fl_gamma"]  # focal loss gamma
@@ -152,7 +156,7 @@ class ComputeLoss:
                 pxy = pxy.sigmoid() * 2 - 0.5
                 pwh = (pwh.sigmoid() * 2) ** 2 * anchors[i]
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
-                iou = bbox_iou(pbox, tbox[i], CIoU=True).squeeze()  # iou(prediction, target)
+                iou = bbox_iou(pbox, tbox[i], CIoU=self.use_ciou, PIoU=self.use_piou).squeeze()  # iou(prediction, target)
                 lbox += (1.0 - iou).mean()  # iou loss
 
                 # Objectness

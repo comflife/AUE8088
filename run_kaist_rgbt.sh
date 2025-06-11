@@ -9,12 +9,12 @@ echo "=== YOLOv5x RGBT 모델 학습 시작 ==="
 python3 train_simple.py \
     --img 640 \
     --batch-size 12 \
-    --epochs 25 \
+    --epochs 30 \
     --data data/kaist-rgbt.yaml \
     --cfg models/yolov5x_kaist-rgbt.yaml \
     --weights yolov5x.pt \
     --workers 8 \
-    --name yolov5x-rgbt-new171 \
+    --name yolov5x-rgbt-new191 \
     --rgbt \
     --hyp data/hyps/hyp.scratch-rgbt.yaml \
     --entity $WANDB_ENTITY \
@@ -29,7 +29,7 @@ python3 train_simple.py \
 # 검증 명령어 - yolov5s
 echo "=== YOLOv5x RGBT 모델 검증 시작 ==="
 python3 val.py \
-    --weights /home/byounggun/AUE8088/pedestrian/yolov5x-rgbt-new171/weights/best.pt \
+    --weights /home/byounggun/AUE8088/pedestrian/yolov5x-rgbt-new191/weights/best.pt \
     --data data/kaist-rgbt.yaml \
     --task test \
     --save-json \
