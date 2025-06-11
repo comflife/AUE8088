@@ -1291,25 +1291,25 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         self.hyp = kwargs.get('hyp') or {}
         
         # Set default augmentation values for RGBT data with safety checks
-        self.hsv_h = 0.015  # Reduced HSV gains for RGBT
-        self.hsv_s = 0.4
-        self.hsv_v = 0.4
-        self.degrees = 5.0  # Reduced rotation for alignment
-        self.translate = 0.05  # Reduced translation
-        self.scale = 0.05  # Reduced scaling
+        self.hsv_h = 0.0  # Reduced HSV gains for RGBT
+        self.hsv_s = 0.0
+        self.hsv_v = 0.0
+        self.degrees = 0.0  # Reduced rotation for alignment
+        self.translate = 0.0  # Reduced translation
+        self.scale = 0.0  # Reduced scaling
         self.shear = 0.0  # No shear to maintain alignment
         self.perspective = 0.0  # No perspective to maintain alignment
         
         # Override defaults with values from hyp if they exist
-        if isinstance(self.hyp, dict):
-            self.hsv_h = self.hyp.get('hsv_h', self.hsv_h) 
-            self.hsv_s = self.hyp.get('hsv_s', self.hsv_s)
-            self.hsv_v = self.hyp.get('hsv_v', self.hsv_v)
-            self.degrees = self.hyp.get('degrees', self.degrees)
-            self.translate = self.hyp.get('translate', self.translate)
-            self.scale = self.hyp.get('scale', self.scale) 
-            self.shear = self.hyp.get('shear', self.shear)
-            self.perspective = self.hyp.get('perspective', self.perspective)
+        # if isinstance(self.hyp, dict):
+        #     self.hsv_h = self.hyp.get('hsv_h', self.hsv_h) 
+        #     self.hsv_s = self.hyp.get('hsv_s', self.hsv_s)
+        #     self.hsv_v = self.hyp.get('hsv_v', self.hsv_v)
+        #     self.degrees = self.hyp.get('degrees', self.degrees)
+        #     self.translate = self.hyp.get('translate', self.translate)
+        #     self.scale = self.hyp.get('scale', self.scale) 
+        #     self.shear = self.hyp.get('shear', self.shear)
+        #     self.perspective = self.hyp.get('perspective', self.perspective)
 
         # Set ignore flag
         cond = self.ignore_settings['train' if is_train else 'test']
@@ -1409,14 +1409,45 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
     def __getitem__(self, index):
         """
+        Returns data for training or validation based on augmentation setting.
         """
         index = self.indices[index]  # linear, shuffled, or image_weights
         hyp = self.hyp
 
-        # --- Mosaic Augmentation ---
-        # 1. Load mosaic
-        imgs, labels = self.load_mosaic(index)  # labels는 (cls, x1, y1, x2, y2) 픽셀 좌표
-        shapes = None
+        # Different handling for training and validation
+        if self.augment:  # Training mode with augmentation
+            # Use mosaic augmentation for training
+            imgs, labels = self.load_mosaic(index)  # labels는 (cls, x1, y1, x2, y2) 픽셀 좌표
+            shapes = None  # Not needed for training
+        else:  # Validation/testing mode without augmentation
+            # Use regular image loading for validation
+            imgs, (h0, w0), img_shapes = self.load_image(index)
+            labels = self.labels[index].copy()
+            
+            # Create proper shapes format for validation
+            # Each shape should be (img_shape, (gain, pad)) where:
+            # - img_shape is the resized shape
+            # - gain is the scaling factor
+            # - pad is the padding amount
+            img_shape = img_shapes[0]
+            h, w = img_shape
+            h0, w0 = h0[0], w0[0]
+            gain = min(h/h0, w/w0)
+            pad_h = (h - h0*gain)/2
+            pad_w = (w - w0*gain)/2
+            
+            shapes = []
+            for _ in range(len(self.modalities)):
+                # Make sure gain is a scalar, not a list or nested list
+                gain_value = float(gain)
+                # Make sure pad_w and pad_h are scalars
+                shapes.append((img_shape, ([gain_value], (float(pad_w), float(pad_h)))))
+                # The format is (img_shape, (gain, pad))
+                # where gain is a float or list of floats and pad is a tuple of 2 floats
+                
+            # Convert labels from normalized to pixel coordinates
+            if len(labels):
+                labels[:, 1:5] = xywhn2xyxy(labels[:, 1:5], w, h, pad_w, pad_h, gain=gain)
 
         # 2. MixUp augmentation (확률적으로 적용)
         if random.random() < hyp.get("mixup", 0.0):
@@ -1572,11 +1603,11 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         mosaic_combined, labels4 = random_perspective(
             mosaic_combined,
             targets=labels4,
-            degrees=self.hyp['degrees'],
-            translate=self.hyp['translate'],
-            scale=self.hyp['scale'],
-            shear=self.hyp['shear'],
-            perspective=self.hyp['perspective'],
+            # degrees=self.hyp['degrees'],
+            # translate=self.hyp['translate'],
+            # scale=self.hyp['scale'],
+            # shear=self.hyp['shear'],
+            # perspective=self.hyp['perspective'],
             border=self.mosaic_border,
         )
 

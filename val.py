@@ -122,7 +122,7 @@ def process_batch(detections, labels, iouv):
 def run(
     data,
     weights=None,  # model.pt path(s)
-    batch_size=32,  # batch size
+    batch_size=12,  # batch size
     imgsz=640,  # inference size (pixels)
     conf_thres=0.001,  # confidence threshold
     iou_thres=0.6,  # NMS IoU threshold
@@ -142,7 +142,7 @@ def run(
     exist_ok=False,  # existing project/name ok, do not increment
     half=True,  # use FP16 half-precision inference
     dnn=False,  # use OpenCV DNN for ONNX inference
-    rgbt_input=False,  # enable RGBT (RGB-Thermal) evaluation mode
+    rgbt_input=True,  # enable RGBT (RGB-Thermal) evaluation mode
     model=None,
     dataloader=None,
     save_dir=Path(""),

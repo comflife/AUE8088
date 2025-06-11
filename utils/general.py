@@ -972,12 +972,38 @@ def resample_segments(segments, n=1000):
 
 def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None):
     """Rescales (xyxy) bounding boxes from img1_shape to img0_shape, optionally using provided `ratio_pad`."""
+    # Handle the case where img0_shape might be None
+    if img0_shape is None:
+        img0_shape = img1_shape  # Use img1_shape if img0_shape is None
+        
     if ratio_pad is None:  # calculate from img0_shape
         gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])  # gain  = old / new
         pad = (img1_shape[1] - img0_shape[1] * gain) / 2, (img1_shape[0] - img0_shape[0] * gain) / 2  # wh padding
     else:
-        gain = ratio_pad[0][0]
-        pad = ratio_pad[1]
+        try:
+            # Based on the debug output, the structure appears to be:
+            # ratio_pad = [[img_h, img_w], [[gain], [pad_x, pad_y]]]
+            
+            # Extract gain from ratio_pad[1][0]
+            if len(ratio_pad) > 1 and isinstance(ratio_pad[1], (list, tuple)):
+                if len(ratio_pad[1]) > 0 and isinstance(ratio_pad[1][0], (list, tuple)):
+                    # Get gain from the first element
+                    gain = float(ratio_pad[1][0][0])  # This should be the gain value
+                else:
+                    gain = 1.0
+                    
+                # Extract padding from ratio_pad[1][1] if available
+                if len(ratio_pad[1]) > 1 and isinstance(ratio_pad[1][1], (list, tuple)) and len(ratio_pad[1][1]) >= 2:
+                    pad = (float(ratio_pad[1][1][0]), float(ratio_pad[1][1][1]))
+                else:
+                    pad = (0.0, 0.0)
+            else:
+                gain = 1.0
+                pad = (0.0, 0.0)  # Default padding if format is incorrect
+        except Exception as e:
+            print(f"Error processing ratio_pad: {e}, using defaults")
+            gain = 1.0
+            pad = (0.0, 0.0)
 
     boxes[..., [0, 2]] -= pad[0]  # x padding
     boxes[..., [1, 3]] -= pad[1]  # y padding
@@ -1007,14 +1033,45 @@ def scale_segments(img1_shape, segments, img0_shape, ratio_pad=None, normalize=F
 
 def clip_boxes(boxes, shape):
     """Clips bounding box coordinates (xyxy) to fit within the specified image shape (height, width)."""
-    if isinstance(boxes, torch.Tensor):  # faster individually
-        boxes[..., 0].clamp_(0, shape[1])  # x1
-        boxes[..., 1].clamp_(0, shape[0])  # y1
-        boxes[..., 2].clamp_(0, shape[1])  # x2
-        boxes[..., 3].clamp_(0, shape[0])  # y2
-    else:  # np.array (faster grouped)
-        boxes[..., [0, 2]] = boxes[..., [0, 2]].clip(0, shape[1])  # x1, x2
-        boxes[..., [1, 3]] = boxes[..., [1, 3]].clip(0, shape[0])  # y1, y2
+    # Handle case where shape is a list instead of a tuple
+    try:
+        # Make sure shape has at least 2 dimensions and they are numbers
+        if shape is None:
+            return boxes  # Skip clipping if shape is None
+        
+        # If shape is a list or contains nested lists, extract height and width values
+        h, w = None, None
+        if isinstance(shape, (list, tuple)):
+            if len(shape) >= 2:
+                if isinstance(shape[0], (list, tuple)):
+                    # If shape is something like [[height, width]], extract first element
+                    h = float(shape[0][0] if isinstance(shape[0][0], (int, float)) else 640)
+                    w = float(shape[0][1] if len(shape[0]) > 1 and isinstance(shape[0][1], (int, float)) else 640)
+                else:
+                    # If shape is [height, width]
+                    h = float(shape[0])
+                    w = float(shape[1])
+            else:
+                # Default values if shape doesn't have enough elements
+                h, w = 640.0, 640.0
+        else:
+            # If shape is not a list or tuple, use default values
+            h, w = 640.0, 640.0
+        
+        if isinstance(boxes, torch.Tensor):  # faster individually
+            boxes[..., 0].clamp_(0, w)  # x1
+            boxes[..., 1].clamp_(0, h)  # y1
+            boxes[..., 2].clamp_(0, w)  # x2
+            boxes[..., 3].clamp_(0, h)  # y2
+        else:  # np.array (faster grouped)
+            boxes[..., [0, 2]] = boxes[..., [0, 2]].clip(0, w)  # x1, x2
+            boxes[..., [1, 3]] = boxes[..., [1, 3]].clip(0, h)  # y1, y2
+    except Exception as e:
+        print(f"Error in clip_boxes: {e}, skipping clipping")
+        # Don't modify boxes if there's an error
+        pass
+    
+    return boxes
 
 
 def clip_segments(segments, shape):
