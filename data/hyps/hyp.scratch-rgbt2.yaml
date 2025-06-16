@@ -29,6 +29,6 @@ shear: 0.0 # No shear to maintain alignment
 perspective: 0.0 # No perspective to maintain alignment
 flipud: 0.0 # No vertical flip
 fliplr: 0.0 # Horizontal flip is safe for RGBT alignment
-mosaic: 1.0 # Reduced mosaic probability for better alignment
-mixup: 0.8 # Reduced mixup probability
+mosaic: 0.3 # Reduced mosaic probability for better alignment
+mixup: 1.0 # Reduced mixup probability
 copy_paste: 0.0 # No copy-paste for RGBT data

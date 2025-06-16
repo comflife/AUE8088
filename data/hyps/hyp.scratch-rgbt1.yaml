@@ -30,5 +30,5 @@ perspective: 0.0 # No perspective to maintain alignment
 flipud: 0.0 # No vertical flip
 fliplr: 0.0 # Horizontal flip is safe for RGBT alignment
 mosaic: 1.0 # Reduced mosaic probability for better alignment
-mixup: 0.8 # Reduced mixup probability
+mixup: 1.0 # Reduced mixup probability
 copy_paste: 0.0 # No copy-paste for RGBT data

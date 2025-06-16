@@ -69,24 +69,60 @@ def save_one_txt(predn, save_conf, shape, file):
             f.write(("%g " * len(line)).rstrip() % line + "\n")
 
 
+# KAIST 데이터셋 이미지 ID 매핑을 위한 전역 변수
+kaist_img_id_map = {}
+
+def load_kaist_img_id_map(ann_file='/home/byounggun/AUE8088/utils/eval/KAIST_val-D_annotation.json'):
+    """
+    KAIST 데이터셋 annotation 파일에서 이미지 이름과 ID 매핑을 로드
+    """
+    global kaist_img_id_map
+    if not kaist_img_id_map:
+        try:
+            with open(ann_file, 'r') as f:
+                data = json.load(f)
+                for img in data.get('images', []):
+                    # 이미지 파일명에서 확장자를 제거하고 ID와 매핑
+                    img_name = Path(img.get('im_name', '')).stem
+                    kaist_img_id_map[img_name] = img.get('id')
+            print(f"성공적으로 {len(kaist_img_id_map)} 개의 KAIST 이미지 ID 매핑을 로드했습니다.")
+        except Exception as e:
+            print(f"이미지 ID 매핑 로드 중 오류 발생: {e}")
+    return kaist_img_id_map
+
 def save_one_json(predn, jdict, path, index, class_map):
     """
     Saves one JSON detection result with image ID, category ID, bounding box, and score.
 
     Example: {"image_id": 42, "category_id": 18, "bbox": [258.15, 41.29, 348.26, 243.78], "score": 0.236}
     """
-    image_id = int(path.stem) if path.stem.isnumeric() else path.stem
+    # KAIST 데이터셋에 맞게 image_id 추출 및 매핑
+    image_name = path.stem
+    
+    # KAIST 이미지 ID 매핑 로드
+    img_id_map = load_kaist_img_id_map()
+    
+    # 이미지 이름으로 ID 찾기
+    if image_name in img_id_map:
+        image_id = img_id_map[image_name]
+        # print(f"매핑 성공: {image_name} -> ID {image_id}")
+    else:
+        # 매핑을 찾을 수 없는 경우 기본값 사용
+        image_id = index
+        print(f"경고: {image_name} 이미지의 ID 매핑을 찾을 수 없습니다. 기본값 {index} 사용")
+    
     box = xyxy2xywh(predn[:, :4])  # xywh
     box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
+    
     for p, b in zip(predn.tolist(), box.tolist()):
         if p[4] < 0.1:
             continue
         jdict.append(
             {
-                "image_name": image_id,
-                "image_id": int(index),
+                "image_name": image_name,
+                "image_id": image_id,  # KAIST 데이터셋과 일치하는 ID 사용
                 "category_id": class_map[int(p[5])],
-                "bbox": [round(x, 3) for x in b],
+                "bbox": [round(x, 3) for x in b],  # [x, y, width, height] 형식
                 "score": round(p[4], 5),
             }
         )
@@ -372,9 +408,9 @@ def run(
         # Run evaluation: KAIST Multispectral Pedestrian Dataset
         try:
             # HACK: need to generate KAIST_annotation.json for your own validation set
-            if not os.path.exists('utils/eval/KAIST_val-A_annotation.json'):
-                raise FileNotFoundError('Please generate KAIST_val-A_annotation.json for your own validation set. (See utils/eval/generate_kaist_ann_json.py)')
-            os.system(f"python3 utils/eval/kaisteval.py --annFile utils/eval/KAIST_val-A_annotation.json --rstFile {pred_json}")
+            if not os.path.exists('utils/eval/KAIST_val-D_annotation.json'):
+                raise FileNotFoundError('Please generate KAIST_val-D_annotation.json for your own validation set. (See utils/eval/generate_kaist_ann_json.py)')
+            os.system(f"python3 utils/eval/kaisteval.py --annFile utils/eval/KAIST_val-D_annotation.json --rstFile {pred_json}")
         except Exception as e:
             LOGGER.info(f"kaisteval unable to run: {e}")
 

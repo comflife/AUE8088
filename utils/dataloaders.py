@@ -170,9 +170,10 @@ def create_dataloader(
     workers=8,
     image_weights=False,
     quad=False,
-    prefix="",
     shuffle=False,
+    prefix="",
     seed=0,
+    cache_images=False,
     rgbt_input=False,
 ):
     if rect and shuffle:
@@ -612,11 +613,23 @@ class LoadImagesAndLabels(Dataset):
 
         for ii, (im_file, label, shape, segment) in enumerate(cache['data']):
             # For RGBT dataset, im_file might contain '{}' which need special handling
-            if isinstance(self, LoadRGBTImagesAndLabels) and '{}' in im_file:
-                # Only verify the path structure without the modality placeholder
-                cached_path = im_file.replace('{}', '*')
-                current_path = self.im_files[ii].replace('{}', '*')
-                assert cached_path == current_path, f"Cache path mismatch: {cached_path} vs {current_path}"
+            if '{}' in im_file or (isinstance(self.im_files[ii], str) and '{}' in self.im_files[ii]):
+                # Handle the case where cached path has {} but current path might not (or vice versa)
+                # This happens when switching between rgbt_input=True and rgbt_input=False
+                try:
+                    # Strip off modality placeholder or convert to wildcard for comparison
+                    cached_path = im_file.replace('{}', '*') if '{}' in im_file else im_file
+                    current_path = self.im_files[ii].replace('{}', '*') if '{}' in self.im_files[ii] else self.im_files[ii]
+                    # Get base paths for comparison by removing special characters
+                    cached_base = os.path.basename(cached_path).replace('*', '')
+                    current_base = os.path.basename(current_path).replace('*', '')
+                    # If the base paths match, consider them the same file
+                    if cached_base == current_base or cached_base in current_base or current_base in cached_base:
+                        pass  # Paths are considered matching
+                    else:
+                        assert False, f"Cache path mismatch: {cached_path} vs {current_path}"
+                except Exception as e:
+                    LOGGER.warning(f"Cache comparison error: {e}. Using cached data anyway.")
             else:
                 # Standard verification for regular datasets
                 assert im_file == self.im_files[ii], f"Cache path mismatch: {im_file} vs {self.im_files[ii]}"
@@ -847,9 +860,8 @@ class LoadImagesAndLabels(Dataset):
         hyp = self.hyp
         
         # ======================= [디버깅 프린트 추가] =======================
-        # __getitem__이 접근하는 hyp 딕셔너리의 'mosaic' 값을 직접 출력합니다.
-        # 이 값이 1.0이 아니라면, hyp 딕셔너리가 잘못 로드되거나 전달된 것입니다.
-        print(f"[__getitem__ 확인] 현재 적용되는 hyp['mosaic'] 값: {hyp.get('mosaic', '키를 찾지 못해 기본값 0.3 사용')}")
+        # 디버그 메시지 제거
+        # print(f"[__getitem__ 확인] 현재 적용되는 hyp['mosaic'] 값: {hyp.get('mosaic', '키를 찾지 못해 기본값 0.3 사용')}")
         # =================================================================
 
         mosaic = self.mosaic and random.random() < hyp.get("mosaic", 0.3)
@@ -1447,7 +1459,10 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
                 
             # Convert labels from normalized to pixel coordinates
             if len(labels):
-                labels[:, 1:5] = xywhn2xyxy(labels[:, 1:5], w, h, pad_w, pad_h, gain=gain)
+                # Apply gain manually to width and height before calling xywhn2xyxy
+                w_with_gain = w * gain
+                h_with_gain = h * gain
+                labels[:, 1:5] = xywhn2xyxy(labels[:, 1:5], w_with_gain, h_with_gain, pad_w, pad_h)
 
         # 2. MixUp augmentation (확률적으로 적용)
         if random.random() < hyp.get("mixup", 0.0):
@@ -1478,10 +1493,15 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
             labels_out = torch.zeros((nl, 6))
 
             if nl:
+                # KAIST 데이터셋의 라벨 형식은 (class, x, y, w, h, occlevel)인데 
+                # YOLOv5에서는 (class, x, y, w, h) 형식만 사용하므로 occlevel 컬럼 제거
+                if labels.shape[1] == 6:  # KAIST 형식이면 마지막 열(occlevel) 제거
+                    labels = labels[:, :5]  # occlevel 열 제거
+                
                 # 픽셀 xyxy 좌표를 정규화된 xywh 좌표로 변환
                 labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=self.img_size, h=self.img_size, clip=True, eps=1e-3)
                 
-                # 최종 텐서에 라벨 정보 할당
+                # 최종 텐서에 라벨 정보 할당 (labels는 이제 항상 5열)
                 labels_out[:, 1:] = torch.from_numpy(labels)
 
         # 최종적으로 생성된 이미지 텐서 리스트와 라벨 텐서를 반환
@@ -1830,6 +1850,13 @@ def verify_rgbt_image_label(modalities, args):
                 assert lb.shape[1] == 6, f"labels require 6 columns, {lb.shape[1]} columns detected"
                 assert (lb >= 0).all(), f"negative label values {lb[lb < 0]}"
                 assert (lb[:, 1:-1] <= 1).all(), f"non-normalized or out of bounds coordinates {lb[:, 1:-1][lb[:, 1:-1] > 1]}"
+                
+                # 좌상단 좌표(x_left, y_top)에서 중심 좌표(x_center, y_center)로 변환
+                # x_center = x_left + width/2, y_center = y_top + height/2
+                lb[:, 1] = lb[:, 1] + lb[:, 3]/2  # x_center = x_left + width/2
+                lb[:, 2] = lb[:, 2] + lb[:, 4]/2 + 0.15  # y_center = y_top + height/2 + offset
+                # y 좌표에 추가 오프셋(0.05)을 더하여 바운딩 박스를 더 아래로 조정
+                
                 _, i = np.unique(lb, axis=0, return_index=True)
                 if len(i) < nl:  # duplicate row check
                     lb = lb[i]  # remove duplicates

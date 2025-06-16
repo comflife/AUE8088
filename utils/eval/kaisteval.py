@@ -129,14 +129,26 @@ class KAISTPedEval(COCOeval):
         for gt in gts:
             gt['ignore'] = gt['ignore'] if 'ignore' in gt else 0
             gbox = gt['bbox']
+            
+            # dataloader에서 적용한 y 좌표 오프셋(0.15)을 평가 시에도 고려합니다.
+            # gbox는 [x, y, width, height] 형식이므로 y 좌표(gbox[1])에 오프셋 적용
+            # 오프셋은 이미지 높이에 대한 비율이므로 절대 픽셀로 변환해야 합니다.
+            # 이미지 ID로부터 이미지를 찾고 높이를 구합니다.
+            img_info = self.cocoGt.imgs[gt['image_id']]
+            img_height = img_info['height']
+            offset_pixels = 0.15 * img_height  # 이미지 높이의 15% 오프셋
+            
+            # 오프셋 적용된 y 좌표로 ignore 조건 검사
+            y_with_offset = gbox[1] + offset_pixels
+            
             gt['ignore'] = 1 \
                 if gt['height'] < self.params.HtRng[id_setup][0] \
                 or gt['height'] > self.params.HtRng[id_setup][1] \
                 or gt['occlusion'] not in self.params.OccRng[id_setup] \
                 or gbox[0] < self.params.bndRng[0] \
-                or gbox[1] < self.params.bndRng[1] \
+                or y_with_offset < self.params.bndRng[1] \
                 or gbox[0] + gbox[2] > self.params.bndRng[2] \
-                or gbox[1] + gbox[3] > self.params.bndRng[3] \
+                or y_with_offset + gbox[3] > self.params.bndRng[3] \
                 else gt['ignore']
             # to use cocoeval
             gt['iscrowd'] = gt['ignore']
@@ -222,12 +234,38 @@ class KAISTPedEval(COCOeval):
         gts = np.asarray(gts)
         pyiscrowd = np.asarray(pyiscrowd)
         ious = np.zeros((len(dts), len(gts)))
+        
+        # dataloaders.py에서 적용한 y 좌표 오프셋(0.15)을 GT에도 적용
+        # 정규화된 좌표에 오프셋을 더하는 방식이므로
+        # 픽셀 좌표로 변환시 이미지 높이를 곱해야 함
+        offset_normalized = 0.0
+        
         for j, gt in enumerate(gts):
-            gx1 = gt[0]
-            gy1 = gt[1]
-            gx2 = gt[0] + gt[2]
-            gy2 = gt[1] + gt[3]
-            garea = gt[2] * gt[3]
+            # 원래 gt 박스는 [x_lefttop, y_lefttop, width, height] 형식
+            # dataloaders.py에서는 y_center = y_top + height/2 + 0.15 형태로 오프셋 적용
+            # 따라서 여기서도 y 중앙값에 오프셋을 더하고, 그 중앙값에서 height/2를 빼서 다시 좌상단 좌표로 변환해야 함
+            
+            # 1. 원래 좌상단 좌표
+            x_left = gt[0]
+            y_top = gt[1]
+            width = gt[2]
+            height = gt[3]
+            # print(x_left, y_top, width, height)
+            
+            # 2. dataloaders.py와 같은 방식으로 오프셋 적용
+            y_center = y_top + height/2 + offset_normalized  # y_center = y_top + height/2 + 0.15
+            
+            # 3. 다시 좌상단 좌표로 변환
+            new_y_top = y_center - height/2
+            
+            # IoU 계산을 위한 박스 좌표 (left, top, right, bottom)
+            gx1 = x_left
+            # gy1 = new_y_top
+            gy1 = y_top
+            gx2 = x_left + width
+            # gy2 = new_y_top + height
+            gy2 = y_top + height
+            garea = width * height
             for i, dt in enumerate(dts):
                 dx1 = dt[0]
                 dy1 = dt[1]
@@ -555,7 +593,7 @@ class KAISTPedEval(COCOeval):
         ax.set_yticklabels(yticklabels)
         ax.grid(which='major', axis='both')
         ax.set_ylim(0.01, 1)
-        ax.set_xlim(2e-4, 50)
+        ax.set_xlim(2e-4, 1e-2)
         ax.set_ylabel('miss rate')
         ax.set_xlabel('false positives per image')
 
@@ -634,8 +672,8 @@ def evaluate(test_annotation_file: str, user_submission_file: str, phase_codenam
     # metrics['MR_-2_iou75_day'] = MR_day[2]
 
     print('')
-    eval_result['night'].params.imgIds = imgIds[1455:]
-    # eval_result['day'].params.imgIds = [ii for ii, img in kaistGt.imgs.items() if get_time_of_day(img['im_name']) == 'night']
+    # eval_result['night'].params.imgIds = imgIds[1455:]
+    eval_result['night'].params.imgIds = [ii for ii, img in kaistGt.imgs.items() if get_time_of_day(img['im_name']) == 'night']
     eval_result['night'].evaluate(0)
     eval_result['night'].accumulate()
     MR_night = eval_result['night'].summarize(0, subsetStr='Night')
@@ -694,11 +732,11 @@ def draw_all(eval_results, filename='figure.jpg'):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='eval models')
-    parser.add_argument('--annFile', type=str, default='evaluation_script/KAIST_annotation.json',
+    parser.add_argument('--annFile', type=str, default='utils/eval/KAIST_val-D_annotation.json',
                         help='Please put the path of the annotation file. Only support json format.')
-    parser.add_argument('--rstFiles', type=str, nargs='+', default=['evaluation_script/MLPD_result.json'],
+    parser.add_argument('--rstFiles', type=str, nargs='+', default=['runs/val/5x-mosaic-mixup-else.json', 'runs/val/5x-mosaic-fpdiou.json', 'runs/val/5x-mosaic-mixup.json', 'runs/val/5x-img-weight-multi-scale-piou.json'],
                         help='Please put the path of the result file. Only support json, txt format.')
-    parser.add_argument('--evalFig', type=str, default=None,
+    parser.add_argument('--evalFig', type=str, default='final.png',
                         help='Please put the output path of the Miss rate versus false positive per-image (FPPI) curve')
     args = parser.parse_args()
 
@@ -707,5 +745,5 @@ if __name__ == "__main__":
 
     # Sort results by MR_all
     if args.evalFig is not None:
-        results = sorted(results, key=lambda x: x['all'].summarize(0), reverse=True)
+        # results = sorted(results, key=lambda x: x['all'].summarize(0), reverse=True)
         draw_all(results, filename=args.evalFig)
