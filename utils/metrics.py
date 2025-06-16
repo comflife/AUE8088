@@ -236,7 +236,7 @@ class ConfusionMatrix:
             print(" ".join(map(str, self.matrix[i])))
 
 
-def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, PIoU=False, eps=1e-7):
+def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, PIoU=False, FPDIoU=False, eps=1e-7):
     """
     Calculates IoU, GIoU, DIoU, or CIoU between two boxes, supporting xywh/xyxy formats.
 
@@ -265,7 +265,7 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, PIoU=Fal
 
     # IoU
     iou = inter / union
-    if CIoU or DIoU or GIoU or PIoU:
+    if CIoU or DIoU or GIoU or PIoU or FPDIoU:
         cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
         ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
         if CIoU or DIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
@@ -277,7 +277,7 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, PIoU=Fal
                     alpha = v / (v - iou + (1 + eps))
                 return iou - (rho2 / c2 + v * alpha)  # CIoU
             return iou - rho2 / c2  # DIoU
-        if PIoU:  # Pixels IoU - consider pixel-wise distance between bounding box edges
+        if PIoU or FPDIoU:  # Pixels IoU or FPDIoU - consider pixel-wise distance between bounding box edges
             # Calculate the convex diagonal squared (필요한 c2 정의)
             c2 = cw**2 + ch**2 + eps  # convex diagonal squared
             
@@ -290,6 +290,21 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, PIoU=Fal
             
             # PIoU = IoU - pixel_distance_penalty
             pixel_distance_penalty = edge_distance / c2
+            
+            if FPDIoU:  # FPDIoU = Focal and Pixel-wise Distance IoU
+                # Calculate center distance
+                rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4
+                
+                # Focal component: give more weight to samples with lower IoU
+                # gamma is the focusing parameter (typically 2)
+                gamma = 2
+                focal_weight = (1 - iou) ** gamma
+                
+                # FPDIoU combines focal weight with both center distance and pixel distance penalties
+                center_penalty = rho2 / c2
+                total_penalty = (center_penalty + pixel_distance_penalty) * focal_weight
+                return iou - total_penalty  # FPDIoU
+            
             return iou - pixel_distance_penalty  # PIoU
         c_area = cw * ch + eps  # convex area
         return iou - (c_area - union) / c_area  # GIoU https://arxiv.org/pdf/1902.09630.pdf
